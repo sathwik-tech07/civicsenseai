@@ -3,17 +3,25 @@ from typing import Dict, Any, List
 import os
 import json
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
-from app.routers.core_data import WARDS, DEPARTMENTS
-from app.routers.incidents import SEED_INCIDENTS
+
+genai = None
+types = None
+
+try:
+    from google import genai
+    from google.genai import types
+except Exception as e:
+    print(f"WARNING: google-genai package not available ({e}). Using simulated AI fallback.")
 
 # Load env variables and configure Gemini
 load_dotenv()
 api_key = os.environ.get("GEMINI_API_KEY")
 client = None
-if api_key:
-    client = genai.Client(api_key=api_key)
+if api_key and genai:
+    try:
+        client = genai.Client(api_key=api_key)
+    except Exception as e:
+        print(f"Failed to initialize Gemini Client: {e}")
 
 class AIService:
     """
