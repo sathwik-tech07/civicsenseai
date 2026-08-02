@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { Users, Shield, Cpu, Activity, CheckCircle2, Lock, Key, Mail, RefreshCw, Sliders } from 'lucide-react';
+import { Users, Shield, Cpu, Activity, CheckCircle2 } from 'lucide-react';
 import type { UserRole } from '../context/AuthContext';
 
 interface UserItem {
@@ -22,7 +21,7 @@ const INITIAL_USERS: UserItem[] = [
 ];
 
 export const UserManagementPanel: React.FC = () => {
-  const [users, setUsers] = useState<UserItem[]>(INITIAL_USERS);
+  const [users, _setUsers] = useState<UserItem[]>(INITIAL_USERS);
   const [activeSubTab, setActiveSubTab] = useState<'users' | 'ai_config' | 'audit'>('users');
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(80);
 

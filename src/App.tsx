@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AuthProvider, useAuth, type UserRole } from './context/AuthContext';
 import { LoginPage } from './components/LoginPage';
 import { Navbar } from './components/Navbar';
@@ -33,12 +33,11 @@ import { IncidentProvider, useIncidents } from './context/IncidentContext';
 
 import type { Incident, PredictiveRiskZone, IncidentStatus, Ward, DepartmentPerformance, CitizenContributor, NotificationItem } from './types';
 import { 
-  apiFetchIncidents, apiCreateIncident, apiUpdateIncident,
   apiFetchWards, apiFetchDepartments, apiFetchPredictiveRisks, apiFetchCitizens, apiFetchNotifications
 } from './services/apiClient';
 import type { AIAction } from './services/apiClient';
 import confetti from 'canvas-confetti';
-import { Bot, RefreshCw, LogOut } from 'lucide-react';
+import { Bot, RefreshCw } from 'lucide-react';
 import './App.css';
 
 const pageVariants = {
@@ -48,7 +47,7 @@ const pageVariants = {
 };
 
 function MainApp() {
-  const { isAuthenticated, isLoading, user, logout } = useAuth();
+  const { isAuthenticated, user, logout } = useAuth();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState<boolean>(false);

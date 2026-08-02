@@ -77,7 +77,7 @@ const OFFICER_UNIT = {
 /**
  * Dynamic Spatial Discovery Engine: Generates real nearby infrastructure telemetry relative to incident coordinates
  */
-interface DynamicInfraAsset {
+export interface DynamicInfraAsset {
   id: string;
   name: string;
   category: 'hospital' | 'school' | 'metro' | 'fire' | 'police' | 'water' | 'electric' | 'govt';

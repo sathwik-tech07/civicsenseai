@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Video, ShieldAlert, Wifi, MapPin } from 'lucide-react';
+import { X, ShieldAlert, Wifi } from 'lucide-react';
 
 interface LiveCCTVModalProps {
   isOpen: boolean;

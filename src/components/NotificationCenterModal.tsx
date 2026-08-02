@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Bell, CheckCheck, Search, X, Cpu, AlertTriangle, Truck, Wrench, CheckCircle, FileText, Sparkles } from 'lucide-react';
+import { Bell, CheckCheck, Search, X, Cpu, AlertTriangle, Truck, Wrench, CheckCircle, FileText } from 'lucide-react';
 import type { NotificationItem } from '../types';
 import { apiFetchNotifications, apiMarkNotificationRead, apiMarkAllNotificationsRead } from '../services/apiClient';
 

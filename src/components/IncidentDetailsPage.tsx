@@ -4,12 +4,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, MapPin, CheckCircle2, Truck, Cpu, Brain,
   Download, Send, ChevronRight, Layers, Phone, Users,
-  Sparkles, Check, X, Bot, Maximize2, LogOut,
-  AlertTriangle, TrendingUp, ShieldAlert, DollarSign, Clock, Building, Activity
+  Sparkles, X, Bot, Maximize2, LogOut,
+  AlertTriangle, TrendingUp, ShieldAlert, Activity
 } from 'lucide-react';
 import type { IncidentStatus, WorkflowStageItem, AuditLogItem } from '../types';
 import { 
-  apiFetchIncidentById, apiUpdateIncident,
+  apiFetchIncidentById,
   apiTransitionWorkflowStage, apiFetchWorkflowTimeline, apiFetchAuditLogs
 } from '../services/apiClient';
 import { downloadIncidentPDFReport } from '../services/pdfReportGenerator';
@@ -91,7 +91,7 @@ export const IncidentDetailsPage: React.FC<IncidentDetailsPageProps> = ({
   // ── Role Selector State ──
   const [activeRole, setActiveRole] = useState<'citizen' | 'engineer' | 'commissioner' | 'admin'>('commissioner');
   const [transitionNotes, setTransitionNotes] = useState('');
-  const [completionPhotoUrl, setCompletionPhotoUrl] = useState('');
+  const [completionPhotoUrl, _setCompletionPhotoUrl] = useState('');
 
   // Fetch live incident details from GET /api/v1/incidents/{id}
   const { data: incident, isLoading, isError } = useQuery({
@@ -138,7 +138,7 @@ export const IncidentDetailsPage: React.FC<IncidentDetailsPageProps> = ({
   };
 
   const handleStatusUpdate = (status: IncidentStatus) => {
-    updateStatusMutation.mutate(status);
+    transitionStageMutation.mutate({ targetStage: status, actor: activeRole, notes: transitionNotes });
   };
 
   const handleDispatch = () => {
@@ -172,15 +172,6 @@ export const IncidentDetailsPage: React.FC<IncidentDetailsPageProps> = ({
   }
 
   const severityColor = SEVERITY_COLORS[incident.severity] || '#F59E0B';
-  const statusColor = STATUS_COLORS[incident.status];
-
-  // 6-stage active index calculation
-  const getStageIndex = () => {
-    if (incident.status === 'resolved') return 5;
-    if (incident.status === 'in_progress') return 4;
-    return 2; // reported
-  };
-  const activeStageIndex = getStageIndex();
 
   // Repaired photo simulation (for before/after)
   const repairedPhotoUrl = 'https://images.unsplash.com/photo-1578575437130-527eed3abbec?auto=format&fit=crop&w=1000&q=80';

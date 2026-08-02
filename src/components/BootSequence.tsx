@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Terminal, ShieldCheck, Database, Map } from 'lucide-react';
+import { Terminal, ShieldCheck } from 'lucide-react';
 
 interface Props {
   onComplete: () => void;

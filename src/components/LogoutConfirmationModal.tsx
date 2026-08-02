@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LogOut, AlertCircle, X } from 'lucide-react';
+import { LogOut, X } from 'lucide-react';
 
 interface Props {
   isOpen: boolean;

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Terminal, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { Terminal, CheckCircle2 } from 'lucide-react';
 
 interface DispatchWebhookModuleProps {
   crewName?: string;

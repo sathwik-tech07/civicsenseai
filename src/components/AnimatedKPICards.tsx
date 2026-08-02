@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { AlertTriangle, Clock, Activity, ShieldCheck, Brain, CheckSquare } from 'lucide-react';
+import { AlertTriangle, Activity, ShieldCheck, Brain, CheckSquare } from 'lucide-react';
 import type { Incident } from '../types';
 
 interface AnimatedKPICardsProps {
@@ -156,7 +156,7 @@ export const AnimatedKPICards: React.FC<AnimatedKPICardsProps> = ({
                 </div>
               ) : (
                 <h3 style={{ margin: 0, fontSize: '2rem', fontFamily: 'var(--font-heading)', color: 'var(--text-primary)', fontWeight: 700 }}>
-                  <CountUp end={card.value || 0} prefix={card.prefix} suffix={card.suffix} decimals={card.decimals} />
+                  <CountUp end={(card as any).value || 0} prefix={(card as any).prefix} suffix={(card as any).suffix} decimals={(card as any).decimals} />
                 </h3>
               )}
             </div>

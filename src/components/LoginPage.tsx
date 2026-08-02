@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Mail, Lock, Eye, EyeOff, ShieldCheck, Sparkles, ArrowRight, Loader2, User } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { Mail, ShieldCheck, Sparkles, ArrowRight, User } from 'lucide-react';
 import { useAuth, type UserRole } from '../context/AuthContext';
 
 interface LoginPageProps {
@@ -435,7 +435,3 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     </div>
   );
 };
-
-function showToast(msg: string) {
-  alert(msg);
-}

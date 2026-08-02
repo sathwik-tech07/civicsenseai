@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { AlertTriangle, FileText, Sparkles, Brain, CheckCircle, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, FileText, Sparkles, Brain, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 interface HeroSectionProps {
@@ -25,7 +25,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
   criticalCount,
   onViewAlerts,
   onGenerateReport,
-  activeIncidentsCount = 12,
+  activeIncidentsCount: _activeIncidentsCount = 12,
   pendingAssignmentsCount = 4
 }) => {
   const { user } = useAuth();

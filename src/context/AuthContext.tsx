@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState } from 'react';
 
 export type UserRole = 'citizen' | 'engineer' | 'commissioner' | 'admin';
 
@@ -42,8 +42,8 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   loginUser: (fullName: string, email: string, role: UserRole) => AuthUser;
-  login: (email: string, password: string) => Promise<AuthUser>;
-  signup: (fullName: string, email: string, password: string, role: UserRole, department?: string) => Promise<AuthUser>;
+  login: (email: string, password?: string) => Promise<AuthUser>;
+  signup: (fullName: string, email: string, password?: string, role?: UserRole, department?: string) => Promise<AuthUser>;
   loginAsDemo: (role?: UserRole) => Promise<void>;
   logout: () => void;
 }
@@ -53,11 +53,9 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(() => {
     try {
-      // Read the offline active user from localStorage. Support legacy shape and prefer the new 'activeUser' key.
       const stored = localStorage.getItem('activeUser') || localStorage.getItem('civicsense_auth_user');
       if (stored) {
         const parsed = JSON.parse(stored);
-        // parsed may be { name, email, role } or the older AuthUser shape with fullName
         if (parsed) {
           const fullName = parsed.fullName || parsed.name || parsed.full_name || '';
           const email = parsed.email || parsed.mail || '';
@@ -68,6 +66,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               fullName: fullName || email.split('@')[0].replace(/[._]/g, ' '),
               email,
               role,
+              department: getDepartmentForRole(role),
             } as AuthUser;
           }
         }
@@ -78,13 +77,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return null;
   });
 
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const isLoading = false;
 
   const loginUser = (fullName: string, email: string, role: UserRole): AuthUser => {
     const cleanName = fullName.trim() || '';
     const cleanEmail = email.trim() || '';
 
-    // The stored offline profile uses a simple shape: { name, email, role }
     const storagePayload = { name: cleanName || (cleanEmail ? cleanEmail.split('@')[0].replace(/[._]/g, ' ') : ''), email: cleanEmail, role };
     try {
       localStorage.setItem('activeUser', JSON.stringify(storagePayload));
@@ -97,13 +95,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       fullName: storagePayload.name || (cleanEmail ? cleanEmail.split('@')[0].replace(/[._]/g, ' ') : 'Civic User'),
       email: storagePayload.email || `${role}@civicsense.ai`,
       role,
+      department: getDepartmentForRole(role),
     } as AuthUser;
 
     setUser(activeUser);
     return activeUser;
   };
 
-  const login = async (email: string, password: string): Promise<AuthUser> => {
+  const login = async (email: string, _password?: string): Promise<AuthUser> => {
     const lower = email.toLowerCase();
     let matchedRole: UserRole = 'commissioner';
     if (lower.includes('engineer')) matchedRole = 'engineer';
@@ -114,7 +113,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return loginUser(name, email, matchedRole);
   };
 
-  const signup = async (fullName: string, email: string, password: string, role: UserRole, department?: string): Promise<AuthUser> => {
+  const signup = async (fullName: string, email: string, _password?: string, role: UserRole = 'citizen', _department?: string): Promise<AuthUser> => {
     return loginUser(fullName, email, role);
   };
 
