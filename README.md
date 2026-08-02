@@ -375,13 +375,50 @@ Render
 
 ---
 
-# 👨‍💻 Contributors
+# Demo Credentials
+👤 Citizen
+Email: citizen@civicsense.ai
+Password: Citizen@123
 
-**Sathwik**
+# Purpose:
 
-AI Engineer | MERN Stack Developer | Smart City Solutions
+Report new incidents
+Track complaint status
+View complaint history
+Receive notifications
+👷 Engineer
+Email: engineer@civicsense.ai
+Password: Engineer@123
 
----
+# Purpose:
+
+View assigned incidents
+Update repair progress
+Upload completion evidence
+Manage field operations
+
+# 🏛️ Commissioner
+Email: commissioner@civicsense.ai
+Password: Commissioner@123
+
+# Purpose:
+
+View city-wide analytics
+Monitor GIS map
+Access AI Copilot
+Review emergency alerts
+Generate reports
+
+# ⚙️ Administrator
+Email: admin@civicsense.ai
+Password: Admin@123
+
+# Purpose:
+
+Manage users
+Configure departments
+Access system settings
+Monitor platform health
 
 # 📜 License
 
