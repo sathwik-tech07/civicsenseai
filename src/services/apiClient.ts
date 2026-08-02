@@ -1,6 +1,11 @@
 import type { Incident, IncidentStatus, IncidentSeverity, IncidentType, WorkflowStageItem, AuditLogItem, NotificationItem } from '../types';
 
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+const getApiBaseUrl = (): string => {
+  const rawUrl = (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://civicsense-ai.onrender.com').trim().replace(/\/$/, '');
+  return rawUrl.endsWith('/api/v1') ? rawUrl : `${rawUrl}/api/v1`;
+};
+
+export const API_BASE_URL = getApiBaseUrl();
 
 /**
  * 1. GET /api/v1/incidents
