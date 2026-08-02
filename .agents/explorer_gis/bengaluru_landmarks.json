@@ -1,0 +1,337 @@
+{
+  "type": "FeatureCollection",
+  "name": "Bengaluru_3D_Landmarks_And_Districts",
+  "crs": {
+    "type": "name",
+    "properties": {
+      "name": "urn:ogc:def:crs:OGC:1.3:CRS84"
+    }
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bld_vidhana_soudha",
+        "name": "Vidhana Soudha (State Legislature)",
+        "category": "government",
+        "height": 45,
+        "min_height": 0,
+        "levels": 4,
+        "address": "Dr. B.R. Ambedkar Veedhi, Sampangi Rama Nagar, Bengaluru",
+        "glow": "#A855F7"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.5900, 12.9791],
+            [77.5912, 12.9791],
+            [77.5912, 12.9801],
+            [77.5900, 12.9801],
+            [77.5900, 12.9791]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bld_ub_city",
+        "name": "UB City & Concorde Tower",
+        "category": "commercial",
+        "height": 128,
+        "min_height": 0,
+        "levels": 37,
+        "address": "Vittal Mallya Rd, KG Halli, D' Souza Layout, Ashok Nagar, Bengaluru",
+        "glow": "#3B82F6"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.5952, 12.9714],
+            [77.5964, 12.9714],
+            [77.5964, 12.9724],
+            [77.5952, 12.9724],
+            [77.5952, 12.9714]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bld_mg_road_utility",
+        "name": "Public Utility Building (MG Road)",
+        "category": "commercial",
+        "height": 85,
+        "min_height": 0,
+        "levels": 25,
+        "address": "MG Road, Craig Park Layout, Ashok Nagar, Bengaluru",
+        "glow": "#2563EB"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.6062, 12.9750],
+            [77.6072, 12.9750],
+            [77.6072, 12.9758],
+            [77.6062, 12.9758],
+            [77.6062, 12.9750]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bld_manipal_hospital",
+        "name": "Manipal Hospital (Old Airport Road)",
+        "category": "hospital",
+        "height": 42,
+        "min_height": 0,
+        "levels": 10,
+        "address": "98, Rustam Bagh Layout, HAL Airport Rd, Bengaluru",
+        "glow": "#06B6D4"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.6477, 12.9577],
+            [77.6489, 12.9577],
+            [77.6489, 12.9587],
+            [77.6477, 12.9587],
+            [77.6477, 12.9577]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bld_bowring_hospital",
+        "name": "Bowring & Lady Curzon Hospital",
+        "category": "hospital",
+        "height": 30,
+        "min_height": 0,
+        "levels": 7,
+        "address": "Shivajinagar, Bengaluru",
+        "glow": "#EF4444"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.6004, 12.9830],
+            [77.6016, 12.9830],
+            [77.6016, 12.9840],
+            [77.6004, 12.9840],
+            [77.6004, 12.9830]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bld_iisc_tower",
+        "name": "Indian Institute of Science Main Tower",
+        "category": "school",
+        "height": 48,
+        "min_height": 0,
+        "levels": 12,
+        "address": "CV Raman Rd, Mathikere, Bengaluru",
+        "glow": "#FBBF24"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.5677, 13.0177],
+            [77.5689, 13.0177],
+            [77.5689, 13.0187],
+            [77.5677, 13.0187],
+            [77.5677, 13.0177]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bld_nps_indiranagar",
+        "name": "National Public School Indiranagar Campus",
+        "category": "school",
+        "height": 26,
+        "min_height": 0,
+        "levels": 6,
+        "address": "12th Main Rd, HAL 2nd Stage, Indiranagar, Bengaluru",
+        "glow": "#F97316"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.6402, 12.9779],
+            [77.6414, 12.9779],
+            [77.6414, 12.9789],
+            [77.6402, 12.9789],
+            [77.6402, 12.9779]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bld_manyata_tech_park",
+        "name": "Manyata Tech Park Tower A",
+        "category": "commercial",
+        "height": 75,
+        "min_height": 0,
+        "levels": 18,
+        "address": "Nagavara Outer Ring Road, Bengaluru",
+        "glow": "#3B82F6"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.6191, 13.0470],
+            [77.6203, 13.0470],
+            [77.6203, 13.0480],
+            [77.6191, 13.0480],
+            [77.6191, 13.0470]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bld_ecity_infosys",
+        "name": "Infosys Corporate Tower (Electronic City)",
+        "category": "commercial",
+        "height": 60,
+        "min_height": 0,
+        "levels": 14,
+        "address": "Electronic City Phase 1, Hosur Road, Bengaluru",
+        "glow": "#3B82F6"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.6596, 12.8447],
+            [77.6608, 12.8447],
+            [77.6608, 12.8457],
+            [77.6596, 12.8457],
+            [77.6596, 12.8447]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bld_itpl_whitefield",
+        "name": "ITPL Discoverer Building",
+        "category": "commercial",
+        "height": 70,
+        "min_height": 0,
+        "levels": 16,
+        "address": "ITPL Main Rd, Whitefield, Bengaluru",
+        "glow": "#3B82F6"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.7342, 12.9858],
+            [77.7354, 12.9858],
+            [77.7354, 12.9868],
+            [77.7342, 12.9868],
+            [77.7342, 12.9858]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bld_peenya_industrial",
+        "name": "Peenya Manufacturing & Logistics Hub",
+        "category": "industrial",
+        "height": 22,
+        "min_height": 0,
+        "levels": 4,
+        "address": "Peenya Industrial Area 1st Stage, Bengaluru",
+        "glow": "#D97706"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.5191, 13.0280],
+            [77.5203, 13.0280],
+            [77.5203, 13.0290],
+            [77.5191, 13.0290],
+            [77.5191, 13.0280]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bld_shantiniketan_residence",
+        "name": "Prestige Shantiniketan Tower 1",
+        "category": "residential",
+        "height": 92,
+        "min_height": 0,
+        "levels": 26,
+        "address": "Whitefield Main Rd, Bengaluru",
+        "glow": "#475569"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.7275, 12.9885],
+            [77.7287, 12.9885],
+            [77.7287, 12.9895],
+            [77.7275, 12.9895],
+            [77.7275, 12.9885]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bld_sobha_city",
+        "name": "Sobha City Skyscraper",
+        "category": "residential",
+        "height": 85,
+        "min_height": 0,
+        "levels": 24,
+        "address": "Thanisandra Main Rd, Bengaluru",
+        "glow": "#475569"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.6274, 13.0645],
+            [77.6286, 13.0645],
+            [77.6286, 13.0655],
+            [77.6274, 13.0655],
+            [77.6274, 13.0645]
+          ]
+        ]
+      }
+    }
+  ]
+}
