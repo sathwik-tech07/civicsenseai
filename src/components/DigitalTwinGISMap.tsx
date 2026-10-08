@@ -321,13 +321,13 @@ export const DigitalTwinGISMap: React.FC<Props> = ({
       >
         <MapController center={mapCenter} zoom={mapZoom} onLoaded={() => setIsMapLoading(false)} />
 
-        {/* Primary Tile Layer: CartoDB Dark Matter / Fallback: OpenStreetMap */}
+        {/* Primary Tile Layer: Esri World Dark Gray Base / Fallback: OpenStreetMap */}
         <TileLayer
-          url={tileError ? "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"}
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>'
+          url={tileError ? "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" : "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"}
+          attribution='&copy; <a href="https://www.esri.com/">Esri</a> &mdash; Esri, DeLorme, NAVTEQ &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           eventHandlers={{
             tileerror: () => {
-              console.warn('CartoDB tile loading warning. Falling back to OpenStreetMap standard tiles.');
+              console.warn('Esri Dark tile loading warning. Falling back to OpenStreetMap standard tiles.');
               setTileError(true);
             },
           }}

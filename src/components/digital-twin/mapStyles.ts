@@ -33,16 +33,13 @@ export const MAP_STYLES: Record<MapStyleId, StyleSpecification> = {
     version: 8,
     name: 'CivicSense Dark Streets',
     sources: {
-      'carto-dark': {
+      'esri-dark': {
         type: 'raster',
         tiles: [
-          'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-          'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-          'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-          'https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+          'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
         ],
         tileSize: 256,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        attribution: '&copy; <a href="https://www.esri.com/">Esri</a> &mdash; Esri, DeLorme, NAVTEQ',
       },
     },
     layers: [
@@ -56,7 +53,7 @@ export const MAP_STYLES: Record<MapStyleId, StyleSpecification> = {
       {
         id: 'dark-base-tiles',
         type: 'raster',
-        source: 'carto-dark',
+        source: 'esri-dark',
         paint: {
           'raster-opacity': 1.0,
         },
