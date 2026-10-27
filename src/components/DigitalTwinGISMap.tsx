@@ -305,7 +305,7 @@ export const DigitalTwinGISMap: React.FC<Props> = ({
                 Initializing GIS Command Center Map…
               </div>
               <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#00D4FF', marginTop: 4 }}>
-                Loading CartoDB Dark Vector Canvas & Layer Engine
+                Loading Esri Dark Vector Canvas & Layer Engine
               </div>
             </div>
           </motion.div>

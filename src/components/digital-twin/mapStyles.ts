@@ -5,7 +5,7 @@ export const MAP_STYLE_OPTIONS: MapStyleOption[] = [
   {
     id: 'streets',
     name: 'Streets Dark',
-    description: 'Carto Dark Matter high-contrast vector theme',
+    description: 'Esri World Dark Gray high-contrast vector theme',
     previewColor: '#0F172A',
   },
   {
