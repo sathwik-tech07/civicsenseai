@@ -1,8 +1,20 @@
 import type { Incident, IncidentStatus, IncidentSeverity, IncidentType, WorkflowStageItem, AuditLogItem, NotificationItem } from '../types';
 
 const getApiBaseUrl = (): string => {
-  const rawUrl = (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://civicsense-ai.onrender.com').trim().replace(/\/$/, '');
-  return rawUrl.endsWith('/api/v1') ? rawUrl : `${rawUrl}/api/v1`;
+  // 1. Explicit environment variable
+  const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL;
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim()) {
+    const cleanUrl = envUrl.trim().replace(/\/$/, '');
+    return cleanUrl.endsWith('/api/v1') ? cleanUrl : `${cleanUrl}/api/v1`;
+  }
+
+  // 2. Running locally in browser (localhost / 127.0.0.1) -> connect to local FastAPI
+  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+    return 'http://127.0.0.1:8000/api/v1';
+  }
+
+  // 3. Deployed cloud fallback
+  return 'https://civicsense-ai.onrender.com/api/v1';
 };
 
 export const API_BASE_URL = getApiBaseUrl();
