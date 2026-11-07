@@ -16,6 +16,8 @@ venv
 *.db
 .env
 *.local
+__pycache__/
+*.pyc
 
 # Editor directories and files
 .vscode/*

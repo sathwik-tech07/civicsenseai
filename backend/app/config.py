@@ -14,6 +14,12 @@ class Settings(BaseModel):
         "sqlite:///./civicsense.db"  # Fallback to SQLite for easy local dev
     )
 
+    # AI Engine Provider Configuration (ollama / gemini / auto)
+    AI_PROVIDER: str = os.getenv("AI_PROVIDER", "ollama")
+    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+    OLLAMA_VISION_MODEL: str = os.getenv("OLLAMA_VISION_MODEL", "moondream")
+
     # CORS origins
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",

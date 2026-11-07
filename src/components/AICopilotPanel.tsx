@@ -3,10 +3,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useMutation } from '@tanstack/react-query';
 import {
   Mic, MicOff, Send, X,
-  Search, Globe, TrendingUp, Loader2, Volume2, VolumeX
+  Search, Globe, TrendingUp, Loader2, Volume2, VolumeX, Cpu
 } from 'lucide-react';
 import type { Incident } from '../types';
-import { apiSendAIChat } from '../services/apiClient';
+import { apiSendAIChat, apiGetAIStatus, type AIStatusInfo } from '../services/apiClient';
 import type { AIAction } from '../services/apiClient';
 
 interface Props {
@@ -56,7 +56,16 @@ export const AICopilotPanel: React.FC<Props> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [execViewMode, setExecViewMode] = useState(false);
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(true);
+  const [aiStatus, setAiStatus] = useState<AIStatusInfo | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      apiGetAIStatus().then(status => {
+        if (status) setAiStatus(status);
+      });
+    }
+  }, [isOpen]);
 
   const aiChatMutation = useMutation({
     mutationFn: (query: string) => apiSendAIChat(query, 'command_os'),
@@ -185,6 +194,25 @@ export const AICopilotPanel: React.FC<Props> = ({
                   <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(139, 92, 246, 0.3)', border: '1px solid #8B5CF6', color: '#C084FC', fontFamily: "'IBM Plex Mono', monospace" }}>
                     GLOBAL
                   </span>
+                  {aiStatus?.ollama?.connected ? (
+                    <span 
+                      title={`Connected to local Ollama (${aiStatus.ollama.active_text_model})`}
+                      style={{ 
+                        fontSize: 9, 
+                        padding: '2px 6px', 
+                        borderRadius: 4, 
+                        background: 'rgba(16, 185, 129, 0.15)', 
+                        border: '1px solid #10B981', 
+                        color: '#34D399', 
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 3
+                      }}
+                    >
+                      <Cpu size={10} /> OLLAMA: {aiStatus.ollama.active_text_model}
+                    </span>
+                  ) : null}
                 </h3>
                 <p style={{ margin: '2px 0 0', fontSize: 10, color: '#94A3B8' }}>
                   Autonomous Action Engine

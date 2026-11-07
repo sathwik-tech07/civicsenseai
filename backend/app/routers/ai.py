@@ -4,6 +4,13 @@ from app.services.ai_service import ai_service
 
 router = APIRouter(prefix="/ai", tags=["AI Intelligence Engine"])
 
+@router.get("/status")
+async def ai_status():
+    """
+    Returns real-time connection status of local Ollama and configured AI engines.
+    """
+    return await ai_service.get_status()
+
 @router.post("/analyze-image")
 async def analyze_image(file: UploadFile = File(...)):
     """

@@ -195,6 +195,39 @@ export interface AIResponse {
   actions: AIAction[];
 }
 
+export interface AIStatusInfo {
+  configured_provider: string;
+  ollama: {
+    connected: boolean;
+    base_url: string;
+    models: string[];
+    active_text_model: string | null;
+    active_vision_model: string | null;
+    has_vision: boolean;
+  };
+  gemini: {
+    available: boolean;
+    model: string;
+  };
+  active_chat_engine: string;
+  active_vision_engine: string;
+}
+
+/**
+ * 6.5. GET /api/v1/ai/status
+ */
+export async function apiGetAIStatus(): Promise<AIStatusInfo | null> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/ai/status`);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Could not fetch AI status:', err);
+  }
+  return null;
+}
+
 /**
  * 7. POST /api/v1/ai/chat
  */
