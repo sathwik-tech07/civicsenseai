@@ -58,6 +58,7 @@ const STEPS: Step[] = [
 ];
 
 const SUPPORTED_CATEGORIES = [
+  'Road Damage',
   'Pothole',
   'Water Main Leak',
   'Sewer Overflow',
@@ -66,6 +67,8 @@ const SUPPORTED_CATEGORIES = [
   'Broken Streetlight',
   'Drainage Blockage',
   'Fallen Tree',
+  'Traffic Signal Failure',
+  'Illegal Dumping',
 ];
 
 /* ─────────────────────────────────────────────

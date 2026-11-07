@@ -186,7 +186,7 @@ Respond STRICTLY in valid JSON matching this schema:
         prompt = """Analyze this municipal infrastructure defect image.
 Classify the civic issue and return strictly valid JSON:
 {
-  "category": "Pothole, Road Crack, Water Main Leak, Sewer Overflow, Garbage Overflow, Broken Streetlight, Drainage Blockage, Fallen Tree, Traffic Signal Failure, or Illegal Dumping",
+  "category": "Road Damage, Pothole, Road Crack, Water Main Leak, Sewer Overflow, Garbage Overflow, Broken Streetlight, Drainage Blockage, Fallen Tree, Traffic Signal Failure, or Illegal Dumping",
   "confidence": 92.5,
   "severity": "low, medium, high, or critical",
   "priority": "Low, Medium, High, or Critical",

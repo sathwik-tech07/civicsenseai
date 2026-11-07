@@ -15,6 +15,7 @@ interface Props {
 }
 
 const SUPPORTED_CATEGORIES = [
+  { id: 'road_damage', label: 'Road Damage' },
   { id: 'pothole', label: 'Pothole' },
   { id: 'road_crack', label: 'Road Crack' },
   { id: 'water_leakage', label: 'Water Leakage' },

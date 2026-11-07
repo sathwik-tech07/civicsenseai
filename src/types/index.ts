@@ -15,6 +15,7 @@ export type IncidentStatus =
   | string;
 export type IncidentType =
   | 'pothole'
+  | 'road_damage'
   | 'road_crack'
   | 'water_leakage'
   | 'garbage_overflow'

@@ -88,6 +88,11 @@ export class AIEngine {
     let boxLabel = '';
 
     switch (type) {
+      case 'road_damage':
+        severity = 'high';
+        features = ['Asphalt Surface Disintegration', 'Pavement Crumbling & Rutting', 'Bitumen Layer Degradation'];
+        boxLabel = `Road Damage [YOLOv11: ${confidence}%]`;
+        break;
       case 'pothole':
         severity = 'critical';
         features = ['Pothole Depth > 18cm', 'Edge Crack Propagation', 'Sub-base Aggregate Displacement'];
