@@ -10,13 +10,18 @@ const getApiBaseUrl = (): string => {
     return cleanUrl.endsWith('/api/v1') ? cleanUrl : `${cleanUrl}/api/v1`;
   }
 
-  // 2. Running locally in browser (localhost / 127.0.0.1) -> connect to local FastAPI
-  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+  // 2. Local development configuration (Vite dev server or localhost/127.0.0.1 browser runtime)
+  if (
+    import.meta.env.DEV ||
+    (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))
+  ) {
     return 'http://127.0.0.1:8000/api/v1';
   }
 
-  // 3. Deployed cloud fallback
-  return 'https://civicsense-ai.onrender.com/api/v1';
+  // 3. Deployed builds require explicit VITE_API_URL or VITE_API_BASE_URL; automatic fallback to production is forbidden
+  throw new Error(
+    'CRITICAL CONFIGURATION ERROR: VITE_API_URL or VITE_API_BASE_URL is required in deployed builds. Automatic fallback to production API has been removed.'
+  );
 };
 
 export const API_BASE_URL = getApiBaseUrl();

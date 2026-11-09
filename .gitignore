@@ -13,11 +13,30 @@ dist
 dist-ssr
 backend/venv
 venv
-*.db
+
+# Environment files & secrets
 .env
-*.local
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Python cache & compiled files
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Local media uploads & scratch testing
+backend/uploads/
+uploads/
+scratch/
 
 # Editor directories and files
 .vscode/*

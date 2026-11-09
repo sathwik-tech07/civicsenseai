@@ -1,0 +1,75 @@
+services:
+  - type: web
+    name: civicsense-backend-staging
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: alembic upgrade head
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: starter
+    region: oregon
+    envVars:
+      - key: ENVIRONMENT
+        value: staging
+      - key: DATABASE_URL
+        fromDatabase:
+          name: civicsense-db-staging
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "10080"
+      - key: STORAGE_PROVIDER
+        value: s3
+      - key: S3_BUCKET_NAME
+        sync: false
+      - key: S3_REGION_NAME
+        value: us-east-1
+      - key: S3_ENDPOINT_URL
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_PRESIGNED_EXPIRATION_SECONDS
+        value: "900"
+      - key: CORS_ORIGINS
+        sync: false
+      - key: RATE_LIMIT_BACKEND
+        value: database
+      - key: TRUST_PROXY_HEADERS
+        value: "false"
+      - key: ENABLE_DEMO_ACCOUNTS
+        value: "false"
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: VISION_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: WHATSAPP_PROVIDER
+        value: meta
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_BUSINESS_ACCOUNT_ID
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: WHATSAPP_API_VERSION
+        value: v21.0
+
+databases:
+  - name: civicsense-db-staging
+    databaseName: civicsense_staging
+    user: civicsense_user
+    plan: starter
+    region: oregon
+    postgresMajorVersion: "16"

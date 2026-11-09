@@ -18,15 +18,18 @@ DEFAULT_TRUSTED_PROXIES = [
     "127.0.0.1",
     "::1",
     "testclient",
-    "10.0.0.0/8",  # Render internal container network
 ]
+
+PRODUCTION_LIKE_ENVIRONMENTS = ("production", "prod", "staging", "stage")
+PERMITTED_DEV_ENVIRONMENTS = ("development", "dev", "test", "testing", "local")
 
 
 def parse_trusted_proxies(raw: str | None) -> list[str]:
     """
     Parses comma-separated list of trusted proxy IPs or CIDR blocks.
-    Defaults to loopback, testclient, and Render's internal container overlay network (10.0.0.0/8).
-    Broad home/office RFC 1918 subnets (172.16.0.0/12, 192.168.0.0/16) are NOT trusted by default.
+    Defaults strictly to loopback and testclient.
+    Do not trust broad or unverified ranges (such as 10.0.0.0/8) unless confirmed by
+    authoritative infrastructure documentation or actual deployment evidence.
     """
     if raw is not None and raw.strip():
         return [token.strip() for token in raw.split(",") if token.strip()]
@@ -73,7 +76,7 @@ class Settings(BaseModel):
             if raw_env is not None:
                 self.ENABLE_DEMO_ACCOUNTS = raw_env.lower() in ("true", "1", "yes")
             else:
-                self.ENABLE_DEMO_ACCOUNTS = False if self.ENVIRONMENT in ("production", "prod") else True
+                self.ENABLE_DEMO_ACCOUNTS = True if self.ENVIRONMENT.lower() in PERMITTED_DEV_ENVIRONMENTS else False
         return self
 
     # Security & JWT Configuration
@@ -89,7 +92,7 @@ class Settings(BaseModel):
     # Database URL
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        "" if os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower() in ("production", "prod") else "sqlite:///./civicsense.db"
+        "" if os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower() in PRODUCTION_LIKE_ENVIRONMENTS else "sqlite:///./civicsense.db"
     )
 
     # File Upload Security Limits
@@ -98,7 +101,7 @@ class Settings(BaseModel):
     # Persistent Storage Configuration
     STORAGE_PROVIDER: str = os.getenv(
         "STORAGE_PROVIDER",
-        "s3" if os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower() in ("production", "prod") else "local"
+        "s3" if os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower() in PRODUCTION_LIKE_ENVIRONMENTS else "local"
     ).lower()
     S3_BUCKET_NAME: str = os.getenv("S3_BUCKET_NAME", "")
     S3_REGION_NAME: str = os.getenv("S3_REGION_NAME", os.getenv("AWS_REGION", "us-east-1"))
@@ -135,10 +138,10 @@ class Settings(BaseModel):
 
     # CORS origins
     # In development, defaults to standard local frontend ports.
-    # In production, must be explicitly configured via CORS_ORIGINS environment variable.
+    # In production and staging, must be explicitly configured via CORS_ORIGINS environment variable.
     CORS_ORIGINS: list[str] = parse_cors_origins(
         os.getenv("CORS_ORIGINS"),
-        is_production=os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower() in ("production", "prod")
+        is_production=os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower() in PRODUCTION_LIKE_ENVIRONMENTS
     )
 
     # Rate Limiting & Brute-Force Protection
@@ -148,41 +151,47 @@ class Settings(BaseModel):
     RATE_LIMIT_SIGNUP_WINDOW_SECONDS: int = int(os.getenv("RATE_LIMIT_SIGNUP_WINDOW_SECONDS", "60"))
     RATE_LIMIT_BACKEND: str = os.getenv(
         "RATE_LIMIT_BACKEND",
-        "database" if os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower() in ("production", "prod") else "database"
+        "database" if os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower() in PRODUCTION_LIKE_ENVIRONMENTS else "database"
     ).lower()
     REDIS_URL: str = os.getenv("REDIS_URL", "")
 
     # Trusted Proxy & Client IP Extraction Configuration
+    # In development/test environments, defaults to True to allow local test client simulations.
+    # In staging and production, defaults to False to keep proxy trust disabled until the actual proxy source is confirmed.
     TRUST_PROXY_HEADERS: bool = os.getenv(
         "TRUST_PROXY_HEADERS",
-        "true" if os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower() in ("production", "prod") else "true"
+        "true" if os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower() in PERMITTED_DEV_ENVIRONMENTS else "false"
     ).lower() in ("true", "1", "yes")
     TRUSTED_PROXIES: list[str] = parse_trusted_proxies(os.getenv("TRUSTED_PROXIES"))
 
 def validate_production_security(settings_obj: Settings):
     """
-    Enforces security in production environments.
+    Enforces security in production and staging environments.
     Never silently permit a known default or empty secret key when deployed.
-    Never silently permit a missing, empty, or SQLite DATABASE_URL in production.
-    Never silently permit missing, empty, or wildcard CORS origins in production.
+    Never silently permit a missing, empty, or SQLite DATABASE_URL in production or staging.
+    Never silently permit missing, empty, or wildcard CORS origins in production or staging.
+    Never silently permit ephemeral local storage in production or staging.
     """
-    if settings_obj.ENVIRONMENT in ("production", "prod"):
+    if settings_obj.ENVIRONMENT in PRODUCTION_LIKE_ENVIRONMENTS:
+        mode_str = "production mode" if settings_obj.ENVIRONMENT in ("production", "prod") else "staging mode"
+        env_capitalized = settings_obj.ENVIRONMENT.capitalize()
+
         insecure_keys = {INSECURE_DEFAULT_SECRET, "secret", "changeme", "jwtsecret", ""}
         if not settings_obj.SECRET_KEY or settings_obj.SECRET_KEY in insecure_keys:
             raise RuntimeError(
-                "CRITICAL SECURITY CONFIGURATION ERROR: A default or insecure SECRET_KEY "
-                "cannot be used in production. Please set a cryptographically secure SECRET_KEY in the environment."
+                f"CRITICAL SECURITY CONFIGURATION ERROR: A default or insecure SECRET_KEY "
+                f"cannot be used in {settings_obj.ENVIRONMENT}. Please set a cryptographically secure SECRET_KEY in the environment."
             )
 
         db_url = (settings_obj.DATABASE_URL or "").strip()
         if not db_url:
             raise RuntimeError(
-                "CRITICAL DATABASE CONFIGURATION ERROR: DATABASE_URL is required in production mode "
-                "(ENVIRONMENT=production). Production cannot start with an empty or missing DATABASE_URL."
+                f"CRITICAL DATABASE CONFIGURATION ERROR: DATABASE_URL is required in {mode_str} "
+                f"(ENVIRONMENT={settings_obj.ENVIRONMENT}). {env_capitalized} cannot start with an empty or missing DATABASE_URL."
             )
         if db_url.startswith("sqlite"):
             raise RuntimeError(
-                "CRITICAL DATABASE CONFIGURATION ERROR: Production environment cannot use SQLite. "
+                f"CRITICAL DATABASE CONFIGURATION ERROR: {env_capitalized} environment cannot use SQLite. "
                 "A managed PostgreSQL database must be configured via DATABASE_URL."
             )
 
@@ -194,20 +203,21 @@ def validate_production_security(settings_obj: Settings):
         ]
         if not cors_origins:
             raise RuntimeError(
-                "CRITICAL CORS CONFIGURATION ERROR: CORS_ORIGINS is required in production mode "
-                "(ENVIRONMENT=production). Specify explicit allowed origins (e.g. CORS_ORIGINS=https://app.example.com)."
+                f"CRITICAL CORS CONFIGURATION ERROR: CORS_ORIGINS is required in {mode_str} "
+                f"(ENVIRONMENT={settings_obj.ENVIRONMENT}). Specify explicit allowed origins (e.g. CORS_ORIGINS=https://app.example.com)."
             )
         if "*" in cors_origins:
+            forbid_str = "in production mode" if settings_obj.ENVIRONMENT in ("production", "prod") else "in staging mode"
             raise RuntimeError(
-                "CRITICAL CORS CONFIGURATION ERROR: Wildcard origin '*' is strictly forbidden in production mode. "
+                f"CRITICAL CORS CONFIGURATION ERROR: Wildcard origin '*' is strictly forbidden {forbid_str}. "
                 "Specify explicit trusted origins in CORS_ORIGINS."
             )
 
-        # Persistent Storage Provider Security in Production
+        # Persistent Storage Provider Security in Production & Staging
         if settings_obj.STORAGE_PROVIDER == "local":
             raise RuntimeError(
-                "CRITICAL STORAGE CONFIGURATION ERROR: Local filesystem storage cannot be used in production mode "
-                "(ENVIRONMENT=production) due to ephemeral instance filesystems. "
+                f"CRITICAL STORAGE CONFIGURATION ERROR: Local filesystem storage cannot be used in {mode_str} "
+                f"(ENVIRONMENT={settings_obj.ENVIRONMENT}) due to ephemeral instance filesystems. "
                 "Persistent S3-compatible object storage must be configured (STORAGE_PROVIDER=s3)."
             )
         if settings_obj.STORAGE_PROVIDER == "s3":
@@ -220,17 +230,17 @@ def validate_production_security(settings_obj: Settings):
                 missing_s3.append("S3_SECRET_ACCESS_KEY")
             if missing_s3:
                 raise RuntimeError(
-                    f"CRITICAL STORAGE CONFIGURATION ERROR: S3 object storage is required in production mode. "
+                    f"CRITICAL STORAGE CONFIGURATION ERROR: S3 object storage is required in {mode_str}. "
                     f"Missing required environment variables: {', '.join(missing_s3)}."
                 )
 
-        # AI Provider Security in Production
+        # AI Provider Security in Production & Staging
         if settings_obj.LLM_PROVIDER == "ollama":
             ollama_url = (settings_obj.OLLAMA_BASE_URL or "").lower()
             local_hosts = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
             if any(h in ollama_url for h in local_hosts):
                 raise RuntimeError(
-                    f"CRITICAL AI CONFIGURATION ERROR: Production environment cannot use localhost for Ollama "
+                    f"CRITICAL AI CONFIGURATION ERROR: {env_capitalized} environment cannot use localhost for Ollama "
                     f"({settings_obj.OLLAMA_BASE_URL}). A remote managed Ollama host or cloud provider is required."
                 )
         elif settings_obj.LLM_PROVIDER == "gemini":
@@ -238,7 +248,7 @@ def validate_production_security(settings_obj: Settings):
             insecure_api_keys = {"", "your_gemini_api_key_here", "dummy", "test", "changeme"}
             if not gemini_key or gemini_key in insecure_api_keys:
                 raise RuntimeError(
-                    "CRITICAL AI CONFIGURATION ERROR: GEMINI_API_KEY is required in production mode "
+                    f"CRITICAL AI CONFIGURATION ERROR: GEMINI_API_KEY is required in {mode_str} "
                     "when LLM_PROVIDER=gemini."
                 )
         else:
@@ -252,11 +262,11 @@ def validate_production_security(settings_obj: Settings):
             insecure_api_keys = {"", "your_gemini_api_key_here", "dummy", "test", "changeme"}
             if not gemini_key or gemini_key in insecure_api_keys:
                 raise RuntimeError(
-                    "CRITICAL AI CONFIGURATION ERROR: GEMINI_API_KEY is required in production mode "
+                    f"CRITICAL AI CONFIGURATION ERROR: GEMINI_API_KEY is required in {mode_str} "
                     "for multimodal vision analysis (VISION_PROVIDER=gemini)."
                 )
 
-        # Meta WhatsApp Cloud API Security Validation in Production
+        # Meta WhatsApp Cloud API Security Validation in Production & Staging
         # If any WhatsApp credentials are set, require full, secure production credentials
         whatsapp_configured = any([
             (settings_obj.WHATSAPP_PHONE_NUMBER_ID or "").strip(),
@@ -280,35 +290,35 @@ def validate_production_security(settings_obj: Settings):
                 missing_wa.append("META_APP_SECRET")
             if missing_wa:
                 raise RuntimeError(
-                    f"CRITICAL WHATSAPP CONFIGURATION ERROR: WhatsApp is partially configured in production mode. "
+                    f"CRITICAL WHATSAPP CONFIGURATION ERROR: WhatsApp is partially configured in {mode_str}. "
                     f"Missing or insecure required environment variables: {', '.join(missing_wa)}."
                 )
 
-        # Demo Accounts Production Security Validation
+        # Demo Accounts Security Validation
         if settings_obj.ENABLE_DEMO_ACCOUNTS:
             raise RuntimeError(
-                "CRITICAL SECURITY CONFIGURATION ERROR: ENABLE_DEMO_ACCOUNTS must be false in production mode "
-                "(ENVIRONMENT=production). Default demo accounts with pre-shared passwords cannot be enabled in production."
+                f"CRITICAL SECURITY CONFIGURATION ERROR: ENABLE_DEMO_ACCOUNTS must be false in {mode_str} "
+                f"(ENVIRONMENT={settings_obj.ENVIRONMENT}). Default demo accounts with pre-shared passwords cannot be enabled in {mode_str}."
             )
 
-        # Rate Limiting Production Security Validation
+        # Rate Limiting Security Validation
         if settings_obj.RATE_LIMIT_BACKEND == "memory":
             raise RuntimeError(
-                "CRITICAL RATE LIMIT CONFIGURATION ERROR: 'memory' rate-limit backend cannot be used in production mode "
-                "(ENVIRONMENT=production) due to ephemeral process-local storage and multi-instance concurrency. "
+                f"CRITICAL RATE LIMIT CONFIGURATION ERROR: 'memory' rate-limit backend cannot be used in {mode_str} "
+                f"(ENVIRONMENT={settings_obj.ENVIRONMENT}) due to ephemeral process-local storage and multi-instance concurrency. "
                 "A shared persistent backend ('database' or 'redis') must be configured via RATE_LIMIT_BACKEND."
             )
         if settings_obj.RATE_LIMIT_BACKEND == "redis":
             redis_url = (settings_obj.REDIS_URL or "").strip()
             if not redis_url:
                 raise RuntimeError(
-                    "CRITICAL RATE LIMIT CONFIGURATION ERROR: REDIS_URL is required in production mode "
+                    f"CRITICAL RATE LIMIT CONFIGURATION ERROR: REDIS_URL is required in {mode_str} "
                     "when RATE_LIMIT_BACKEND=redis."
                 )
             insecure_redis = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
             if any(h in redis_url.lower() for h in insecure_redis):
                 raise RuntimeError(
-                    f"CRITICAL RATE LIMIT CONFIGURATION ERROR: Production environment cannot use localhost for Redis "
+                    f"CRITICAL RATE LIMIT CONFIGURATION ERROR: {env_capitalized} environment cannot use localhost for Redis "
                     f"({settings_obj.REDIS_URL}). A managed remote Redis cluster is required."
                 )
             try:
