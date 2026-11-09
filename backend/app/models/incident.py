@@ -25,6 +25,7 @@ class Incident(Base):
     resolved_photo_url = Column(Text, nullable=True)
     assigned_crew = Column(String, nullable=True)
     user_id = Column(String, ForeignKey("users.id"), nullable=True)
+    assigned_engineer_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
     
     # Complete Incident Intelligence Fields
     confidence = Column(Float, default=92.5)
@@ -42,3 +43,4 @@ class Incident(Base):
 
     # Relationships
     ai_analysis = relationship("AIAnalysis", back_populates="incident", uselist=False, cascade="all, delete-orphan")
+    assigned_engineer = relationship("User", foreign_keys=[assigned_engineer_id])

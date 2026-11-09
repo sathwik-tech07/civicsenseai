@@ -13,10 +13,10 @@ interface UserItem {
 }
 
 const INITIAL_USERS: UserItem[] = [
-  { id: 'usr-1', fullName: 'Dr. Anita Roy', email: 'commissioner@civicsense.ai', role: 'commissioner', department: 'Executive Commission', status: 'Active', lastActive: '2 mins ago' },
-  { id: 'usr-2', fullName: 'Eng. Rajesh V', email: 'engineer@civicsense.ai', role: 'engineer', department: 'Road Infrastructure & Works', status: 'Active', lastActive: '12 mins ago' },
-  { id: 'usr-3', fullName: 'Priya Sharma', email: 'citizen@civicsense.ai', role: 'citizen', department: 'Ward 4 Resident Corps', status: 'Active', lastActive: '1 hour ago' },
-  { id: 'usr-4', fullName: 'System Administrator', email: 'admin@civicsense.ai', role: 'admin', department: 'Smart City IT Command', status: 'Active', lastActive: 'Just now' },
+  { id: 'usr-1', fullName: 'Dr. Anita Roy', email: 'anita.roy@civicsense.ai', role: 'commissioner', department: 'Executive Commission', status: 'Active', lastActive: '2 mins ago' },
+  { id: 'usr-2', fullName: 'Eng. Rajesh V', email: 'rajesh.v@civicsense.ai', role: 'engineer', department: 'Road Infrastructure & Works', status: 'Active', lastActive: '12 mins ago' },
+  { id: 'usr-3', fullName: 'Priya Sharma', email: 'priya.sharma@civicsense.ai', role: 'citizen', department: 'Ward 4 Resident Corps', status: 'Active', lastActive: '1 hour ago' },
+  { id: 'usr-4', fullName: 'System Administrator', email: 'sys.operations@civicsense.ai', role: 'admin', department: 'Smart City IT Command', status: 'Active', lastActive: 'Just now' },
   { id: 'usr-5', fullName: 'Insp. Suresh Nair', email: 'suresh.nair@civicsense.ai', role: 'engineer', department: 'Water Supply & Sewerage Board', status: 'Active', lastActive: '45 mins ago' },
 ];
 

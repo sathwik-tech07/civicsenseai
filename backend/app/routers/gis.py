@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 from typing import Optional
 from app.services.gis_service import GISService
+from app.models.user import User
+from app.utils.dependencies import get_current_user
 
 router = APIRouter(prefix="/gis", tags=["GIS & Smart City Intelligence"])
 
@@ -10,7 +12,8 @@ def get_full_gis_intelligence(
     lng: float = Query(..., description="Longitude of selected incident"),
     incident_type: Optional[str] = Query("pothole"),
     severity: Optional[str] = Query("high"),
-    ward_name: Optional[str] = Query("")
+    ward_name: Optional[str] = Query(""),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Returns complete integrated Smart City Intelligence payload for incident coordinates.
@@ -27,21 +30,24 @@ def get_full_gis_intelligence(
 @router.get("/infrastructure")
 def get_nearby_infrastructure(
     lat: float = Query(...),
-    lng: float = Query(...)
+    lng: float = Query(...),
+    current_user: User = Depends(get_current_user)
 ):
     return GISService.get_nearby_infrastructure(lat, lng)
 
 @router.get("/weather")
 def get_live_weather(
     lat: float = Query(...),
-    lng: float = Query(...)
+    lng: float = Query(...),
+    current_user: User = Depends(get_current_user)
 ):
     return GISService.get_live_weather(lat, lng)
 
 @router.get("/traffic")
 def get_traffic_intelligence(
     lat: float = Query(...),
-    lng: float = Query(...)
+    lng: float = Query(...),
+    current_user: User = Depends(get_current_user)
 ):
     return GISService.get_traffic_intelligence(lat, lng)
 
@@ -51,6 +57,7 @@ def get_xai_risk(
     lng: float = Query(...),
     incident_type: Optional[str] = Query("pothole"),
     severity: Optional[str] = Query("high"),
-    ward_name: Optional[str] = Query("")
+    ward_name: Optional[str] = Query(""),
+    current_user: User = Depends(get_current_user)
 ):
     return GISService.calculate_xai_risk(lat, lng, incident_type, severity, ward_name)

@@ -48,7 +48,8 @@ class WorkflowService:
         actor: str,
         notes: Optional[str] = None,
         resolved_photo_url: Optional[str] = None,
-        assigned_crew: Optional[str] = None
+        assigned_crew: Optional[str] = None,
+        assigned_engineer_id: Optional[str] = None
     ) -> Dict[str, Any]:
         incident = db.query(Incident).filter(Incident.id == incident_id).first()
         if not incident:
@@ -106,6 +107,8 @@ class WorkflowService:
             incident.resolved_photo_url = resolved_photo_url
         if assigned_crew:
             incident.assigned_crew = assigned_crew
+        if assigned_engineer_id:
+            incident.assigned_engineer_id = assigned_engineer_id
 
         db.commit()
         db.refresh(incident)

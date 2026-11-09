@@ -2,11 +2,16 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.incident import Incident
+from app.models.user import User
+from app.utils.dependencies import require_admin_or_commissioner, require_staff
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard Telemetry"])
 
 @router.get("/kpis")
-def get_dashboard_kpis(db: Session = Depends(get_db)):
+def get_dashboard_kpis(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_or_commissioner)
+):
     total_incidents = db.query(Incident).count()
     critical_incidents = db.query(Incident).filter(Incident.severity == "critical").count()
     resolved_incidents = db.query(Incident).filter(Incident.status == "resolved").count()
@@ -21,7 +26,9 @@ def get_dashboard_kpis(db: Session = Depends(get_db)):
     }
 
 @router.get("/ward-performance")
-def get_ward_performance():
+def get_ward_performance(
+    current_user: User = Depends(require_staff)
+):
     return [
         {"id": "w-1", "name": "Ward 1 - Metro Health Corridor", "overall_score": 84, "open_complaints": 3},
         {"id": "w-2", "name": "Ward 2 - Heritage Commercial Hub", "overall_score": 79, "open_complaints": 5},

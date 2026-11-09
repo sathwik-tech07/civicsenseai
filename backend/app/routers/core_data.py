@@ -1,4 +1,6 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from app.models.user import User
+from app.utils.dependencies import require_staff, require_admin_or_commissioner
 
 router = APIRouter(tags=["Core Data"])
 
@@ -285,16 +287,24 @@ CITIZENS = [
 
 @router.get("/wards")
 def get_wards():
+    """Public municipal reference data."""
     return WARDS
 
 @router.get("/departments")
 def get_departments():
+    """Public municipal service departments directory."""
     return DEPARTMENTS
 
 @router.get("/predictive-risks")
-def get_predictive_risks():
+def get_predictive_risks(
+    current_user: User = Depends(require_staff)
+):
+    """Predictive failure risk intelligence for municipal staff."""
     return PREDICTIVE_RISKS
 
 @router.get("/citizens")
-def get_citizens():
+def get_citizens(
+    current_user: User = Depends(require_admin_or_commissioner)
+):
+    """Citizen directory & gamification scores for municipal administration."""
     return CITIZENS

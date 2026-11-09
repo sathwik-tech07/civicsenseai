@@ -1,56 +1,12 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.database import engine, Base
-from app.routers import auth, incidents, ai, dashboard, reports, core_data, gis, workflow
+from app.database import engine
+from app.middleware.security_headers import SecurityHeadersMiddleware
+from app.routers import auth, incidents, ai, dashboard, reports, core_data, gis, workflow, whatsapp
 import app.models.workflow
-
-def migrate_sqlite_db():
-    import sqlite3
-    db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "civicsense.db")
-    if os.path.exists(db_path):
-        try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            cursor.execute("PRAGMA table_info(incidents);")
-            columns = [row[1] for row in cursor.fetchall()]
-
-            new_cols = [
-                ("confidence", "FLOAT DEFAULT 92.5"),
-                ("description", "TEXT"),
-                ("recommended_department", "VARCHAR"),
-                ("estimated_repair_time", "VARCHAR"),
-                ("public_safety_risk", "TEXT"),
-                ("environmental_impact", "TEXT"),
-                ("future_damage_prediction", "TEXT"),
-                ("ai_recommendation", "TEXT"),
-                ("executive_summary", "TEXT"),
-                ("explanation", "TEXT"),
-            ]
-            for col_name, col_type in new_cols:
-                if col_name not in columns:
-                    cursor.execute(f"ALTER TABLE incidents ADD COLUMN {col_name} {col_type};")
-            cursor.execute("PRAGMA table_info(users);")
-            user_columns = [row[1] for row in cursor.fetchall()]
-            if "department" not in user_columns:
-                cursor.execute("ALTER TABLE users ADD COLUMN department VARCHAR;")
-            if "status" not in user_columns:
-                cursor.execute("ALTER TABLE users ADD COLUMN status VARCHAR DEFAULT 'active';")
-            if "updated_at" not in user_columns:
-                cursor.execute("ALTER TABLE users ADD COLUMN updated_at DATETIME;")
-
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print("Migration info:", e)
-
-migrate_sqlite_db()
-
-# Initialize SQLAlchemy Database Tables
-Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -60,19 +16,24 @@ app = FastAPI(
 )
 
 # Enable CORS for Production & Local Frontends
+has_wildcard = "*" in settings.CORS_ORIGINS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=not has_wildcard,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
 
-# Mount static directory for uploaded images
+# Register Defense-in-Depth HTTP Security Headers Middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Ensure uploads directory exists on host for local storage provider
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+# Note: Unauthenticated StaticFiles mount on /uploads has been removed for Step 30 security.
+# Citizen evidence photos are private and accessible strictly via GET /api/v1/incidents/{incident_id}/evidence.
 
 # Include Router Modules
 app.include_router(auth.router, prefix=settings.API_V1_STR)
@@ -83,6 +44,7 @@ app.include_router(reports.router, prefix=settings.API_V1_STR)
 app.include_router(core_data.router, prefix=settings.API_V1_STR)
 app.include_router(gis.router, prefix=settings.API_V1_STR)
 app.include_router(workflow.router, prefix=settings.API_V1_STR)
+app.include_router(whatsapp.router, prefix=settings.API_V1_STR)
 
 @app.get("/")
 def root():

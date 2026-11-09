@@ -1,5 +1,7 @@
 import type { Incident, IncidentStatus, IncidentSeverity, IncidentType, WorkflowStageItem, AuditLogItem, NotificationItem } from '../types';
 
+export const TOKEN_STORAGE_KEY = 'civicsense_jwt';
+
 const getApiBaseUrl = (): string => {
   // 1. Explicit environment variable
   const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL;
@@ -20,10 +22,109 @@ const getApiBaseUrl = (): string => {
 export const API_BASE_URL = getApiBaseUrl();
 
 /**
+ * Token Storage Helpers
+ */
+export function getStoredToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch (e) {
+    console.warn('Failed to read token from localStorage', e);
+    return null;
+  }
+}
+
+export function setStoredToken(token: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (token) {
+      localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    } else {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+  } catch (e) {
+    console.warn('Failed to update stored token in localStorage', e);
+  }
+}
+
+/**
+ * Centralized Unauthorized (401) Event Dispatcher
+ */
+type UnauthorizedCallback = () => void;
+const unauthorizedListeners: Set<UnauthorizedCallback> = new Set();
+
+export function onUnauthorized(callback: UnauthorizedCallback): () => void {
+  unauthorizedListeners.add(callback);
+  return () => unauthorizedListeners.delete(callback);
+}
+
+export function notifyUnauthorized(): void {
+  setStoredToken(null);
+  unauthorizedListeners.forEach((cb) => {
+    try {
+      cb();
+    } catch (err) {
+      console.error('Error in onUnauthorized listener:', err);
+    }
+  });
+}
+
+/**
+ * Centralized API Fetch Wrapper
+ * Injects Authorization: Bearer <access_token> on protected requests,
+ * sets default Content-Type headers, and intercepts 401 Unauthorized responses.
+ */
+export interface ApiFetchOptions extends RequestInit {
+  isProtected?: boolean;
+}
+
+export async function apiFetch(
+  endpoint: string,
+  options: ApiFetchOptions = {}
+): Promise<Response> {
+  const { isProtected = true, headers: customHeaders, ...restOptions } = options;
+
+  let url: string;
+  if (endpoint.startsWith('http://') || endpoint.startsWith('https://')) {
+    url = endpoint;
+  } else {
+    const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    url = `${API_BASE_URL}${cleanEndpoint}`;
+  }
+
+  const headers = new Headers(customHeaders || {});
+
+  // Inject Bearer token on protected endpoints if not already provided
+  if (isProtected && !headers.has('Authorization')) {
+    const token = getStoredToken();
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+  }
+
+  // Set default JSON Content-Type if body is not FormData and not explicitly set
+  if (restOptions.body && !(restOptions.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  const response = await fetch(url, {
+    ...restOptions,
+    headers,
+  });
+
+  // If 401 occurs on a protected endpoint, notify listeners to clear state and trigger logout
+  if (response.status === 401 && isProtected) {
+    notifyUnauthorized();
+  }
+
+  return response;
+}
+
+/**
  * 1. GET /api/v1/incidents
  */
 export async function apiFetchIncidents(): Promise<Incident[]> {
-  const res = await fetch(`${API_BASE_URL}/incidents/`, { method: 'GET' });
+  const res = await apiFetch('/incidents/', { method: 'GET' });
   if (!res.ok) {
     throw new Error(`Failed to fetch incidents: ${res.statusText}`);
   }
@@ -55,14 +156,14 @@ export async function apiCreateIncident(inc: Incident): Promise<Incident> {
     assigned_crew: inc.assignedCrew || 'Unassigned',
   };
 
-  const res = await fetch(`${API_BASE_URL}/incidents/`, {
+  const res = await apiFetch('/incidents/', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
-    throw new Error(`Failed to create incident: ${res.statusText}`);
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Failed to create incident: ${res.statusText}`);
   }
   const data = await res.json();
   return adaptBackendIncident(data);
@@ -72,7 +173,7 @@ export async function apiCreateIncident(inc: Incident): Promise<Incident> {
  * 3. GET /api/v1/incidents/{id}
  */
 export async function apiFetchIncidentById(id: string): Promise<Incident> {
-  const res = await fetch(`${API_BASE_URL}/incidents/${id}`);
+  const res = await apiFetch(`/incidents/${id}`, { method: 'GET' });
   if (!res.ok) {
     throw new Error(`Failed to fetch incident ${id}: ${res.statusText}`);
   }
@@ -91,16 +192,16 @@ export async function apiUpdateIncident(id: string, updates: Partial<Incident>):
   if (updates.assignedCrew) payload.assigned_crew = updates.assignedCrew;
   if (updates.priorityScore) payload.priority_score = updates.priorityScore;
 
-  const res = await fetch(`${API_BASE_URL}/incidents/${id}`, {
+  const res = await apiFetch(`/incidents/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
-    throw new Error(`Failed to update incident ${id}: ${res.statusText}`);
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Failed to update incident ${id}: ${res.statusText}`);
   }
-  
+
   const data = await res.json();
   return adaptBackendIncident(data);
 }
@@ -129,13 +230,13 @@ export async function apiAnalyzeIncidentVision(filename: string, imageUrl: strin
     // Fetch the local blob URL to get the actual file data
     const resBlob = await fetch(imageUrl);
     const blob = await resBlob.blob();
-    
+
     const formData = new FormData();
     formData.append('file', blob, filename);
 
-    const res = await fetch(`${API_BASE_URL}/incidents/analyze-vision`, {
+    const res = await apiFetch('/incidents/analyze-vision', {
       method: 'POST',
-      body: formData
+      body: formData,
     });
 
     if (res.ok) {
@@ -165,10 +266,10 @@ export async function apiAnalyzeIncidentVision(filename: string, imageUrl: strin
 }
 
 /**
- * 5. DELETE /api/v1/incidents/{id}
+ * 6. DELETE /api/v1/incidents/{id}
  */
 export async function apiDeleteIncident(id: string): Promise<boolean> {
-  const res = await fetch(`${API_BASE_URL}/incidents/${id}`, { method: 'DELETE' });
+  const res = await apiFetch(`/incidents/${id}`, { method: 'DELETE' });
   if (!res.ok) {
     throw new Error(`Failed to delete incident ${id}`);
   }
@@ -176,11 +277,11 @@ export async function apiDeleteIncident(id: string): Promise<boolean> {
 }
 
 /**
- * 6. GET /api/v1/dashboard/kpis
+ * 7. GET /api/v1/dashboard/kpis
  */
 export async function apiFetchDashboardKPIs() {
   try {
-    const res = await fetch(`${API_BASE_URL}/dashboard/kpis`);
+    const res = await apiFetch('/dashboard/kpis');
     if (res.ok) return await res.json();
   } catch (err) {
     console.warn('Failed to fetch KPIs from FastAPI:', err);
@@ -226,11 +327,11 @@ export interface AIStatusInfo {
 }
 
 /**
- * 6.5. GET /api/v1/ai/status
+ * 8. GET /api/v1/ai/status
  */
 export async function apiGetAIStatus(): Promise<AIStatusInfo | null> {
   try {
-    const res = await fetch(`${API_BASE_URL}/ai/status`);
+    const res = await apiFetch('/ai/status');
     if (res.ok) {
       return await res.json();
     }
@@ -241,13 +342,16 @@ export async function apiGetAIStatus(): Promise<AIStatusInfo | null> {
 }
 
 /**
- * 7. POST /api/v1/ai/chat
+ * 9. POST /api/v1/ai/chat
  */
-export async function apiSendAIChat(query: string, system: 'command_os' | 'incident_copilot' = 'command_os', incidentId?: string): Promise<AIResponse> {
+export async function apiSendAIChat(
+  query: string,
+  system: 'command_os' | 'incident_copilot' = 'command_os',
+  incidentId?: string
+): Promise<AIResponse> {
   try {
-    const res = await fetch(`${API_BASE_URL}/ai/chat`, {
+    const res = await apiFetch('/ai/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, system, incident_id: incidentId }),
     });
     if (res.ok) {
@@ -258,34 +362,34 @@ export async function apiSendAIChat(query: string, system: 'command_os' | 'incid
     console.warn('Failed to send AI chat to FastAPI, using smart fallback logic:', err);
   }
 
-  // Robust Smart Fallback for Action Engine Demonstration
+  // Smart Fallback for Action Engine Demonstration
   return generateFallbackAIResponse(query);
 }
 
 function generateFallbackAIResponse(query: string): AIResponse {
   const q = query.toLowerCase();
-  
+
   if (q.includes('ward') || q.includes('attention') || q.includes('risk')) {
     return {
       text: 'AI Command OS analysis: Ward 4 (Metro Health Corridor) requires immediate commissioner attention due to 98% water main structural failure probability during approaching monsoon peak.',
       actions: [
         { label: 'Fly camera to Ward 4', actionType: 'FLY_TO_COORDS', payload: [77.5946, 12.9716] },
-        { label: 'Inspect Ward 4 3D Twin', actionType: 'NAVIGATE_TO_TAB', payload: '3d-twin' }
+        { label: 'Inspect Ward 4 3D Twin', actionType: 'NAVIGATE_TO_TAB', payload: '3d-twin' },
       ],
       dataSummary: {
         'Target Ward': 'Ward 4 Metro Health Corridor',
         'Vulnerability Index': '98% Critical Risk',
         'Primary Threat': 'Stormwater Drain & Water Main Leakage',
-      }
+      },
     };
   }
-  
+
   if (q.includes('dispatch') || q.includes('crew') || q.includes('send')) {
     return {
       text: 'Dispatch command recognized. Recommending Rapid Response Crew Alpha-1 deployment for the highest priority open critical incident.',
       actions: [
         { label: 'Dispatch Alpha-1 to Critical Incident', actionType: 'DISPATCH_CREW', payload: 'auto' },
-        { label: 'View Incident Feed', actionType: 'NAVIGATE_TO_TAB', payload: 'dashboard' }
+        { label: 'View Incident Feed', actionType: 'NAVIGATE_TO_TAB', payload: 'dashboard' },
       ],
     };
   }
@@ -295,13 +399,13 @@ function generateFallbackAIResponse(query: string): AIResponse {
       text: "Executive City Intelligence Briefing for today: City Health Index stands at 88/100 (+4.2% YTD). AI Early Intervention has saved ₹1.42M in emergency repairs this quarter.",
       actions: [
         { label: 'View Department Performance', actionType: 'NAVIGATE_TO_TAB', payload: 'war-room' },
-        { label: 'Open Executive Dashboard', actionType: 'NAVIGATE_TO_TAB', payload: 'dashboard' }
+        { label: 'Open Executive Dashboard', actionType: 'NAVIGATE_TO_TAB', payload: 'dashboard' },
       ],
       dataSummary: {
         'City Health Score': '88 / 100',
         'Total Early Savings': '₹1.42M YTD',
         'SLA Compliance Rate': '94.2%',
-      }
+      },
     };
   }
 
@@ -309,43 +413,43 @@ function generateFallbackAIResponse(query: string): AIResponse {
     text: `AI Command OS processed city query "${query}". All 5 active AI models report stable baseline operations across the metro area.`,
     actions: [
       { label: 'Which ward needs immediate attention?', actionType: 'NAVIGATE_TO_TAB', payload: 'gis' },
-      { label: 'Generate today\'s city briefing', actionType: 'NAVIGATE_TO_TAB', payload: 'reports' }
-    ]
+      { label: "Generate today's city briefing", actionType: 'NAVIGATE_TO_TAB', payload: 'reports' },
+    ],
   };
 }
 
 /**
- * 8. GET /api/v1/wards
+ * 10. GET /api/v1/wards
  */
 export async function apiFetchWards(): Promise<any[]> {
-  const res = await fetch(`${API_BASE_URL}/wards`);
+  const res = await apiFetch('/wards');
   if (!res.ok) throw new Error('Failed to fetch wards from FastAPI');
   return await res.json();
 }
 
 /**
- * 9. GET /api/v1/departments
+ * 11. GET /api/v1/departments
  */
 export async function apiFetchDepartments(): Promise<any[]> {
-  const res = await fetch(`${API_BASE_URL}/departments`);
+  const res = await apiFetch('/departments');
   if (!res.ok) throw new Error('Failed to fetch departments from FastAPI');
   return await res.json();
 }
 
 /**
- * 10. GET /api/v1/predictive-risks
+ * 12. GET /api/v1/predictive-risks
  */
 export async function apiFetchPredictiveRisks(): Promise<any[]> {
-  const res = await fetch(`${API_BASE_URL}/predictive-risks`);
+  const res = await apiFetch('/predictive-risks');
   if (!res.ok) throw new Error('Failed to fetch predictive risks from FastAPI');
   return await res.json();
 }
 
 /**
- * 11. GET /api/v1/citizens
+ * 13. GET /api/v1/citizens
  */
 export async function apiFetchCitizens(): Promise<any[]> {
-  const res = await fetch(`${API_BASE_URL}/citizens`);
+  const res = await apiFetch('/citizens');
   if (!res.ok) throw new Error('Failed to fetch citizens from FastAPI');
   return await res.json();
 }
@@ -365,7 +469,9 @@ function adaptBackendIncident(data: any): Incident {
     lat: data.lat || 12.9716,
     lng: data.lng || 77.5946,
     address: data.address || 'Metro Health Corridor',
-    reportedDate: data.created_at ? new Date(data.created_at.endsWith('Z') ? data.created_at : data.created_at + 'Z').toLocaleString() : 'Just Now',
+    reportedDate: data.created_at
+      ? new Date(data.created_at.endsWith('Z') ? data.created_at : data.created_at + 'Z').toLocaleString()
+      : 'Just Now',
     reportedBy: data.reported_by || 'Citizen Reporter',
     priorityScore: data.priority_score || 85,
     estimatedRepairCost: data.estimated_repair_cost || 85000,
@@ -445,7 +551,7 @@ export interface GISIntelligencePayload {
 }
 
 /**
- * 12. GET /api/v1/gis/intelligence
+ * 14. GET /api/v1/gis/intelligence
  * Fetches dynamic GIS Intelligence bundle for incident coordinates
  */
 export async function apiFetchGISIntelligence(
@@ -463,13 +569,13 @@ export async function apiFetchGISIntelligence(
   if (severity) params.append('severity', severity);
   if (wardName) params.append('ward_name', wardName);
 
-  const res = await fetch(`${API_BASE_URL}/gis/intelligence?${params.toString()}`);
+  const res = await apiFetch(`/gis/intelligence?${params.toString()}`);
   if (!res.ok) throw new Error('Failed to fetch GIS Intelligence from backend');
   return await res.json();
 }
 
 /**
- * 13. POST /api/v1/workflow/transition
+ * 15. POST /api/v1/workflow/transition
  */
 export async function apiTransitionWorkflowStage(
   incidentId: string,
@@ -479,17 +585,16 @@ export async function apiTransitionWorkflowStage(
   resolvedPhotoUrl?: string,
   assignedCrew?: string
 ): Promise<any> {
-  const res = await fetch(`${API_BASE_URL}/workflow/transition`, {
+  const res = await apiFetch('/workflow/transition', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       incident_id: incidentId,
       target_stage: targetStage,
       actor,
       notes,
       resolved_photo_url: resolvedPhotoUrl,
-      assigned_crew: assignedCrew
-    })
+      assigned_crew: assignedCrew,
+    }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Failed stage transition' }));
@@ -499,85 +604,93 @@ export async function apiTransitionWorkflowStage(
 }
 
 /**
- * 14. GET /api/v1/workflow/timeline/{incident_id}
+ * 16. GET /api/v1/workflow/timeline/{incident_id}
  */
 export async function apiFetchWorkflowTimeline(incidentId: string): Promise<WorkflowStageItem[]> {
-  const res = await fetch(`${API_BASE_URL}/workflow/timeline/${incidentId}`);
+  const res = await apiFetch(`/workflow/timeline/${incidentId}`);
   if (!res.ok) throw new Error('Failed to fetch incident timeline');
   return await res.json();
 }
 
 /**
- * 15. GET /api/v1/workflow/audit-logs/{incident_id}
+ * 17. GET /api/v1/workflow/audit-logs/{incident_id}
  */
 export async function apiFetchAuditLogs(incidentId: string): Promise<AuditLogItem[]> {
-  const res = await fetch(`${API_BASE_URL}/workflow/audit-logs/${incidentId}`);
+  const res = await apiFetch(`/workflow/audit-logs/${incidentId}`);
   if (!res.ok) throw new Error('Failed to fetch incident audit logs');
   return await res.json();
 }
 
 /**
- * 16. GET /api/v1/workflow/notifications
+ * 18. GET /api/v1/workflow/notifications
  */
 export async function apiFetchNotifications(): Promise<NotificationItem[]> {
-  const res = await fetch(`${API_BASE_URL}/workflow/notifications`);
+  const res = await apiFetch('/workflow/notifications');
   if (!res.ok) throw new Error('Failed to fetch notifications');
   return await res.json();
 }
 
 /**
- * 16B. PUT /api/v1/workflow/notifications/{id}/read
+ * 19. PUT /api/v1/workflow/notifications/{id}/read
  */
 export async function apiMarkNotificationRead(id: string): Promise<boolean> {
-  const res = await fetch(`${API_BASE_URL}/workflow/notifications/${id}/read`, { method: 'PUT' });
+  const res = await apiFetch(`/workflow/notifications/${id}/read`, { method: 'PUT' });
   return res.ok;
 }
 
 /**
- * 16C. PUT /api/v1/workflow/notifications/read-all
+ * 20. PUT /api/v1/workflow/notifications/read-all
  */
 export async function apiMarkAllNotificationsRead(): Promise<boolean> {
-  const res = await fetch(`${API_BASE_URL}/workflow/notifications/read-all`, { method: 'PUT' });
+  const res = await apiFetch('/workflow/notifications/read-all', { method: 'PUT' });
   return res.ok;
 }
 
 /**
- * 16D. POST /api/v1/workflow/notifications/create
+ * 21. POST /api/v1/workflow/notifications/create
  */
-export async function apiCreateNotification(incidentId: string, type: string, title: string, message: string): Promise<any> {
-  const res = await fetch(`${API_BASE_URL}/workflow/notifications/create`, {
+export async function apiCreateNotification(
+  incidentId: string,
+  type: string,
+  title: string,
+  message: string
+): Promise<any> {
+  const res = await apiFetch('/workflow/notifications/create', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ incident_id: incidentId, type, title, message })
+    body: JSON.stringify({ incident_id: incidentId, type, title, message }),
   });
   if (res.ok) return await res.json();
   return null;
 }
 
 /**
- * 17. POST /api/v1/auth/login
+ * 22. POST /api/v1/auth/login
  */
 export async function apiLogin(email: string, password: string): Promise<any> {
-  const res = await fetch(`${API_BASE_URL}/auth/login`, {
+  const res = await apiFetch('/auth/login', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password })
+    isProtected: false,
+    body: JSON.stringify({ email: email.trim(), password }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Invalid credentials' }));
     throw new Error(err.detail || 'Incorrect email or password');
   }
-  return await res.json();
+  const data = await res.json();
+  if (data?.access_token) {
+    setStoredToken(data.access_token);
+  }
+  return data;
 }
 
 /**
- * 18. POST /api/v1/auth/signup
+ * 23. POST /api/v1/auth/signup
  */
 export async function apiSignup(fullName: string, email: string, password: string, role: string): Promise<any> {
-  const res = await fetch(`${API_BASE_URL}/auth/signup`, {
+  const res = await apiFetch('/auth/signup', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ full_name: fullName, email, password, role })
+    isProtected: false,
+    body: JSON.stringify({ full_name: fullName.trim(), email: email.trim(), password, role }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Registration failed' }));
@@ -587,12 +700,19 @@ export async function apiSignup(fullName: string, email: string, password: strin
 }
 
 /**
- * 19. GET /api/v1/auth/me
+ * 24. GET /api/v1/auth/me
  */
 export async function apiGetMe(token?: string): Promise<any> {
-  const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(`${API_BASE_URL}/auth/me`, { headers });
-  if (!res.ok) throw new Error('Failed to fetch user profile');
+  const customHeaders: Record<string, string> = {};
+  if (token) {
+    customHeaders['Authorization'] = `Bearer ${token}`;
+  }
+  const res = await apiFetch('/auth/me', {
+    headers: token ? customHeaders : undefined,
+    isProtected: true,
+  });
+  if (!res.ok) {
+    throw new Error('Failed to fetch user profile');
+  }
   return await res.json();
 }

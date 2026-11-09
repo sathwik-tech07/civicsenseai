@@ -17,6 +17,8 @@ class IncidentBase(BaseModel):
     saved_early_intervention: Optional[float] = 0.0
     photo_url: str
     assigned_crew: Optional[str] = None
+    assigned_engineer_id: Optional[str] = None
+    user_id: Optional[str] = None
 
     # Complete AI Intelligence Fields
     confidence: Optional[float] = 92.5
@@ -38,6 +40,7 @@ class IncidentUpdate(BaseModel):
     status: Optional[str] = None
     severity: Optional[str] = None
     assigned_crew: Optional[str] = None
+    assigned_engineer_id: Optional[str] = None
     priority_score: Optional[int] = None
 
 class IncidentResponse(IncidentBase):

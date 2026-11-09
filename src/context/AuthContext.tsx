@@ -1,4 +1,12 @@
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import {
+  apiLogin,
+  apiSignup,
+  apiGetMe,
+  getStoredToken,
+  setStoredToken,
+  onUnauthorized,
+} from '../services/apiClient';
 
 export type UserRole = 'citizen' | 'engineer' | 'commissioner' | 'admin';
 
@@ -22,7 +30,7 @@ export function getAvatarInitials(name: string): string {
   return name.slice(0, 2).toUpperCase();
 }
 
-function getDepartmentForRole(role: UserRole): string {
+export function getDepartmentForRole(role: UserRole): string {
   switch (role) {
     case 'commissioner':
       return 'Executive Command & Municipal Administration';
@@ -41,7 +49,7 @@ interface AuthContextType {
   user: AuthUser | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  loginUser: (fullName: string, email: string, role: UserRole) => AuthUser;
+  loginUser: (fullName: string, email: string, role: UserRole, password?: string) => Promise<AuthUser>;
   login: (email: string, password?: string) => Promise<AuthUser>;
   signup: (fullName: string, email: string, password?: string, role?: UserRole, department?: string) => Promise<AuthUser>;
   loginAsDemo: (role?: UserRole) => Promise<void>;
@@ -51,93 +59,184 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<AuthUser | null>(() => {
-    try {
-      const stored = localStorage.getItem('activeUser') || localStorage.getItem('civicsense_auth_user');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed) {
-          const fullName = parsed.fullName || parsed.name || parsed.full_name || '';
-          const email = parsed.email || parsed.mail || '';
-          const role: UserRole = parsed.role || parsed.userRole || 'commissioner';
-          if (email && role) {
-            return {
-              id: parsed.id || `usr-${Date.now()}`,
-              fullName: fullName || email.split('@')[0].replace(/[._]/g, ' '),
-              email,
-              role,
-              department: getDepartmentForRole(role),
-            } as AuthUser;
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  // Session verification on mount / page refresh
+  useEffect(() => {
+    let isMounted = true;
+
+    const verifySession = async () => {
+      const storedToken = getStoredToken();
+      if (!storedToken) {
+        logout();
+        if (isMounted) setIsLoading(false);
+        return;
+      }
+
+      try {
+        const profile = await apiGetMe(storedToken);
+        if (isMounted && profile && profile.id) {
+          const validatedUser: AuthUser = {
+            id: profile.id,
+            email: profile.email,
+            fullName: profile.full_name,
+            role: profile.role as UserRole,
+            department: profile.department || getDepartmentForRole(profile.role as UserRole),
+            token: storedToken,
+            createdAt: profile.created_at,
+          };
+          setUser(validatedUser);
+          try {
+            localStorage.setItem(
+              'activeUser',
+              JSON.stringify({
+                id: validatedUser.id,
+                name: validatedUser.fullName,
+                email: validatedUser.email,
+                role: validatedUser.role,
+              })
+            );
+          } catch (e) {
+            console.warn('Failed to persist activeUser to localStorage', e);
           }
+        } else {
+          logout();
+        }
+      } catch (err) {
+        console.warn('Session verification failed on startup / refresh:', err);
+        logout();
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
         }
       }
-    } catch (e) {
-      console.warn('Failed to parse localStorage user:', e);
+    };
+
+    verifySession();
+
+    // Subscribe to centralized 401 unauthorized notifications
+    const unsubscribe = onUnauthorized(() => {
+      if (isMounted) {
+        logout();
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const login = async (email: string, password?: string): Promise<AuthUser> => {
+    const cleanEmail = email.trim();
+    const cleanPassword = (password ?? '').trim();
+    if (!cleanPassword && !import.meta.env.DEV) {
+      throw new Error('Password is required.');
     }
-    return null;
-  });
+    const finalPassword = cleanPassword || (import.meta.env.DEV ? 'password123' : '');
+    const data = await apiLogin(cleanEmail, finalPassword);
+    const backendUser = data.user;
+    const token = data.access_token;
 
-  const isLoading = false;
+    setStoredToken(token);
 
-  const loginUser = (fullName: string, email: string, role: UserRole): AuthUser => {
-    const cleanName = fullName.trim() || '';
-    const cleanEmail = email.trim() || '';
+    const authUser: AuthUser = {
+      id: backendUser.id,
+      email: backendUser.email,
+      fullName: backendUser.full_name,
+      role: backendUser.role as UserRole,
+      department: backendUser.department || getDepartmentForRole(backendUser.role as UserRole),
+      token,
+      createdAt: backendUser.created_at,
+    };
 
-    const storagePayload = { name: cleanName || (cleanEmail ? cleanEmail.split('@')[0].replace(/[._]/g, ' ') : ''), email: cleanEmail, role };
     try {
-      localStorage.setItem('activeUser', JSON.stringify(storagePayload));
+      localStorage.setItem(
+        'activeUser',
+        JSON.stringify({
+          id: authUser.id,
+          name: authUser.fullName,
+          email: authUser.email,
+          role: authUser.role,
+        })
+      );
     } catch (e) {
       console.warn('Failed to write activeUser to localStorage', e);
     }
 
-    const activeUser: AuthUser = {
-      id: `usr-${Date.now()}`,
-      fullName: storagePayload.name || (cleanEmail ? cleanEmail.split('@')[0].replace(/[._]/g, ' ') : 'Civic User'),
-      email: storagePayload.email || `${role}@civicsense.ai`,
-      role,
-      department: getDepartmentForRole(role),
-    } as AuthUser;
-
-    setUser(activeUser);
-    return activeUser;
+    setUser(authUser);
+    return authUser;
   };
 
-  const login = async (email: string, _password?: string): Promise<AuthUser> => {
-    const lower = email.toLowerCase();
-    let matchedRole: UserRole = 'commissioner';
-    if (lower.includes('engineer')) matchedRole = 'engineer';
-    else if (lower.includes('citizen')) matchedRole = 'citizen';
-    else if (lower.includes('admin')) matchedRole = 'admin';
-
-    const name = email.split('@')[0]?.replace(/[._]/g, ' ') || 'Civic User';
-    return loginUser(name, email, matchedRole);
+  const signup = async (
+    fullName: string,
+    email: string,
+    password?: string,
+    role: UserRole = 'citizen',
+    _department?: string
+  ): Promise<AuthUser> => {
+    const cleanPassword = (password ?? '').trim();
+    if (!cleanPassword && !import.meta.env.DEV) {
+      throw new Error('Password is required.');
+    }
+    const finalPassword = cleanPassword || (import.meta.env.DEV ? 'password123' : '');
+    await apiSignup(fullName.trim(), email.trim(), finalPassword, role);
+    return await login(email, finalPassword);
   };
 
-  const signup = async (fullName: string, email: string, _password?: string, role: UserRole = 'citizen', _department?: string): Promise<AuthUser> => {
-    return loginUser(fullName, email, role);
+  const loginUser = async (
+    fullName: string,
+    email: string,
+    role: UserRole,
+    password?: string
+  ): Promise<AuthUser> => {
+    const cleanPassword = (password ?? '').trim();
+    if (!cleanPassword && !import.meta.env.DEV) {
+      throw new Error('Password is required.');
+    }
+    const pwd = cleanPassword || (import.meta.env.DEV ? 'password123' : '');
+    try {
+      return await login(email, pwd);
+    } catch (err: any) {
+      // In development, auto-signup helper if user does not exist in local dev DB
+      if (import.meta.env.DEV) {
+        try {
+          await apiSignup(fullName, email, pwd, role);
+          return await login(email, pwd);
+        } catch (signupErr) {
+          throw err;
+        }
+      }
+      throw err;
+    }
   };
 
   const loginAsDemo = async (role: UserRole = 'commissioner') => {
-    const demoProfiles: Record<UserRole, { name: string; email: string }> = {
-      commissioner: { name: 'Dr. Anita Roy', email: 'commissioner@civicsense.ai' },
-      engineer: { name: 'Eng. Rajesh V', email: 'engineer@civicsense.ai' },
-      citizen: { name: 'Priya Sharma', email: 'citizen@civicsense.ai' },
-      admin: { name: 'System Administrator', email: 'admin@civicsense.ai' },
-    };
-    const p = demoProfiles[role] || demoProfiles.commissioner;
-    loginUser(p.name, p.email, role);
+    if (import.meta.env.DEV) {
+      const demoProfiles: Record<UserRole, { name: string; email: string }> = {
+        commissioner: { name: 'Dr. Anita Roy', email: 'commissioner@civicsense.ai' },
+        engineer: { name: 'Eng. Rajesh V', email: 'engineer@civicsense.ai' },
+        citizen: { name: 'Priya Sharma', email: 'citizen@civicsense.ai' },
+        admin: { name: 'System Administrator', email: 'admin@civicsense.ai' },
+      };
+      const p = demoProfiles[role] || demoProfiles.commissioner;
+      await login(p.email, 'password123');
+    } else {
+      throw new Error('Demo accounts are disabled in production mode.');
+    }
   };
 
   const logout = () => {
     setUser(null);
+    setStoredToken(null);
     try {
       localStorage.removeItem('activeUser');
-      // also remove legacy key if present
       localStorage.removeItem('civicsense_auth_user');
       localStorage.removeItem('civicsense_jwt');
       sessionStorage.clear();
     } catch (e) {
-      console.warn('Failed to clear local/session storage during logout', e);
+      console.warn('Failed to clear storage during logout', e);
     }
   };
 

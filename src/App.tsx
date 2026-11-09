@@ -47,7 +47,7 @@ const pageVariants = {
 };
 
 function MainApp() {
-  const { isAuthenticated, user, logout } = useAuth();
+  const { isAuthenticated, user, logout, isLoading } = useAuth();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState<boolean>(false);
@@ -69,21 +69,25 @@ function MainApp() {
   const { data: wards = [] } = useQuery<Ward[]>({
     queryKey: ['wards'],
     queryFn: apiFetchWards,
+    enabled: isAuthenticated,
   });
 
   const { data: predictiveRisks = [] } = useQuery<PredictiveRiskZone[]>({
     queryKey: ['predictiveRisks'],
     queryFn: apiFetchPredictiveRisks,
+    enabled: isAuthenticated,
   });
 
   const { data: departments = [] } = useQuery<DepartmentPerformance[]>({
     queryKey: ['departments'],
     queryFn: apiFetchDepartments,
+    enabled: isAuthenticated,
   });
 
   const { data: citizens = [] } = useQuery<CitizenContributor[]>({
     queryKey: ['citizens'],
     queryFn: apiFetchCitizens,
+    enabled: isAuthenticated,
   });
 
   const [isNotificationOpen, setIsNotificationOpen] = useState<boolean>(false);
@@ -101,6 +105,7 @@ function MainApp() {
     queryKey: ['notifications'],
     queryFn: apiFetchNotifications,
     refetchInterval: 3000,
+    enabled: isAuthenticated,
   });
 
   // Global Incident Store (backed by GET /api/v1/incidents, auto-refreshed on POST /api/v1/incidents)
@@ -186,6 +191,34 @@ function MainApp() {
     else if (role === 'citizen') setActiveTab('mobile');
     else if (role === 'admin') setActiveTab('analytics');
   };
+
+  if (isLoading) {
+    return (
+      <div style={{
+        minHeight: '100vh',
+        background: '#070B14',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontFamily: 'var(--font-body)',
+        color: '#00D4FF',
+      }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+          <div style={{
+            width: 44,
+            height: 44,
+            border: '3px solid rgba(0, 212, 255, 0.2)',
+            borderTopColor: '#00D4FF',
+            borderRadius: '50%',
+            animation: 'spin 1s linear infinite',
+          }} />
+          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+            Verifying Municipal Session...
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     return <LoginPage onLoginSuccess={handleRoleLogin} />;
