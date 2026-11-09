@@ -1,5 +1,6 @@
 import datetime
 import uuid
+import asyncio
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 
@@ -112,6 +113,28 @@ class WorkflowService:
 
         db.commit()
         db.refresh(incident)
+
+        # Automated Outbound WhatsApp Status Notification for Citizen
+        try:
+            if incident.user_id and incident.user_id.startswith("usr-wa-"):
+                phone = incident.user_id[len("usr-wa-"):]
+                from app.services.whatsapp_service import whatsapp_service
+                stage_display = target_stage.replace('_', ' ').title()
+                msg = (
+                    f"📢 *CivicSense Incident Update*\n\n"
+                    f"• Complaint ID: `{incident_id}`\n"
+                    f"• New Stage: *{stage_display}*\n"
+                    f"• Department: {department}\n"
+                    f"• Notes: {notes or 'No additional notes'}\n\n"
+                    f"Reply 'track {incident_id}' anytime for full progress."
+                )
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(whatsapp_service.send_text_message(phone, msg))
+                except RuntimeError:
+                    asyncio.run(whatsapp_service.send_text_message(phone, msg))
+        except Exception:
+            pass
 
         return {
             "status": "success",
@@ -257,6 +280,8 @@ class WorkflowService:
     def _get_notification_meta(stage: str):
         if stage == "ai_analysis":
             return "AI Vision Analysis Complete", "AI_ANALYSIS_COMPLETE"
+        elif stage == "commissioner_review":
+            return "Commissioner Review & Authorization", "COMMISSIONER_REVIEW"
         elif stage == "crew_assigned":
             return "Rapid Response Crew Dispatched", "CREW_ASSIGNED"
         elif stage == "repair_started":

@@ -31,13 +31,24 @@ def normalize_database_url(url: Optional[str] = None) -> str:
 
 DATABASE_URL = normalize_database_url(settings.DATABASE_URL)
 
-# Create database engine
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+# Create database engine with connection pooling optimized for environment
+engine_kwargs = {
+    "pool_pre_ping": True,
+}
+
+if DATABASE_URL.startswith("sqlite"):
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    # PostgreSQL / Supabase Session Pooler optimizations:
+    # pool_pre_ping tests connection liveness before checkout
+    # pool_recycle recycles idle connections before Supabase pooler closes them
+    engine_kwargs["pool_size"] = 10
+    engine_kwargs["max_overflow"] = 20
+    engine_kwargs["pool_recycle"] = 300
 
 engine = create_engine(
     DATABASE_URL,
-    connect_args=connect_args,
-    pool_pre_ping=True
+    **engine_kwargs
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
