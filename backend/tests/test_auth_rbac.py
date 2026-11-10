@@ -85,6 +85,11 @@ class TestAuthAndRBAC(unittest.TestCase):
         cls.engineer_token = create_access_token({"sub": cls.test_engineer.id})
         cls.commissioner_token = create_access_token({"sub": cls.test_commissioner.id})
 
+    def setUp(self):
+        from app.models.rate_limit import RateLimitEvent
+        self.db.query(RateLimitEvent).delete()
+        self.db.commit()
+
     @classmethod
     def tearDownClass(cls):
         cls.db.delete(cls.test_citizen)

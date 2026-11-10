@@ -35,11 +35,18 @@ WELCOME_MESSAGE = (
     "👋 *Welcome to CivicSense AI — Smart City Civic Assistance*\n\n"
     "I can help you report and track municipal infrastructure problems across Bengaluru.\n\n"
     "📸 *How to Report an Issue:*\n"
-    "Simply take a photo of a pothole, water leak, garbage overflow, or broken streetlight and send it here. "
-    "Our multimodal AI (Gemini 2.5 Flash) will analyze the defect, estimate repair costs, and prepare your report for confirmation.\n\n"
-    "🔍 *How to Track a Complaint:*\n"
-    "Reply with `track <Complaint ID>` (e.g. `track INC-2026-BA317F`) to see live progress and dispatched crew details.\n\n"
-    "💬 You can also ask me any questions about municipal services. How can I assist you today?"
+    "• Send a photo of the defect (pothole, water leak, garbage, broken light).\n"
+    "• Or describe the issue in words (e.g. *'Big pothole near MG Road'*).\n"
+    "• Share your GPS location pin or type your address.\n\n"
+    "🔍 *Tracking & Citizen Services:*\n"
+    "• `track <Complaint ID>` — Check live progress and assigned crew\n"
+    "• `my complaints` — View all your reported complaints\n"
+    "• `escalate <Complaint ID> <reason>` — Request commissioner escalation\n"
+    "• `rate <Complaint ID> <1-5>` — Submit satisfaction rating\n\n"
+    "👷 *Municipal Staff Services:*\n"
+    "• `engineer login <passcode>` | `tasks` | `accept <ID>` | `start work <ID>` | `resolve <ID>`\n"
+    "• `commissioner login <passcode>` | `summary`\n\n"
+    "How can I assist you today?"
 )
 
 
@@ -225,53 +232,200 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                                 )
 
                         # ------------------------------------------------------
-                        # 2. Text Messages (Greeting, Tracking, Confirm/Cancel, Chat)
+                        # 2. Text Messages (Staff Commands, Citizen Commands, Chat)
                         # ------------------------------------------------------
                         elif msg.type == "text" and msg.text:
                             raw_text = msg.text.body.strip()
                             lower_text = raw_text.lower()
+                            user_role = whatsapp_service.get_user_role(db, sender_phone)
 
-                            # Greeting detection
-                            if lower_text in ("hi", "hello", "hey", "start", "help", "menu", "namaste", "hi!") or lower_text.startswith("hi "):
-                                await whatsapp_service.send_text_message(sender_phone, WELCOME_MESSAGE)
+                            # A. Staff Authentication: e.g. "engineer login <passcode>" or "staff login <passcode>"
+                            auth_match = re.match(r"^(?:staff|login\s+)?(engineer|commissioner|admin)(?:\s+login)?\s+(\S+)$", lower_text)
+                            if auth_match:
+                                target_role = auth_match.group(1)
+                                passcode = auth_match.group(2)
+                                success, msg_text = whatsapp_service.authenticate_staff(db, sender_phone, target_role, passcode)
+                                await whatsapp_service.send_text_message(sender_phone, msg_text)
 
-                            # Complaint Tracking regex: 'track <ID>' or 'status <ID>'
-                            elif re.match(r"^(?:track|status)\s+([a-zA-Z0-9\-_]+)", lower_text, re.IGNORECASE):
-                                match = re.match(r"^(?:track|status)\s+([a-zA-Z0-9\-_]+)", raw_text, re.IGNORECASE)
+                            # B. Commissioner / Executive Commands
+                            elif lower_text in ("summary", "status summary", "executive summary"):
+                                if user_role in ("commissioner", "admin"):
+                                    await whatsapp_service.get_executive_summary(db, sender_phone)
+                                else:
+                                    await whatsapp_service.send_text_message(
+                                        sender_phone,
+                                        "⚠️ Executive summary is restricted to municipal commissioners. Reply *commissioner login <passcode>* to authenticate."
+                                    )
+
+                            # C. Field Engineer Commands
+                            elif lower_text in ("tasks", "my tasks", "assigned", "my assignments"):
+                                if user_role in ("engineer", "admin"):
+                                    await whatsapp_service.get_engineer_tasks(db, sender_phone)
+                                else:
+                                    await whatsapp_service.send_text_message(
+                                        sender_phone,
+                                        "⚠️ Work order queue is restricted to field engineers. Reply *engineer login <passcode>* to authenticate."
+                                    )
+
+                            elif re.match(r"^accept\s+([a-zA-Z0-9\-_]+)", lower_text):
+                                match = re.match(r"^accept\s+([a-zA-Z0-9\-_]+)", raw_text, re.IGNORECASE)
+                                if match:
+                                    if user_role not in ("engineer", "admin"):
+                                        await whatsapp_service.send_text_message(
+                                            sender_phone,
+                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account. Reply 'engineer login <passcode>' to authenticate."
+                                        )
+                                    else:
+                                        await whatsapp_service.engineer_accept_assignment(db, sender_phone, match.group(1))
+
+                            elif re.match(r"^reject\s+([a-zA-Z0-9\-_]+)", lower_text):
+                                match = re.match(r"^reject\s+([a-zA-Z0-9\-_]+)(?:\s+(.*))?", raw_text, re.IGNORECASE)
+                                if match:
+                                    if user_role not in ("engineer", "admin"):
+                                        await whatsapp_service.send_text_message(
+                                            sender_phone,
+                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account. Reply 'engineer login <passcode>' to authenticate."
+                                        )
+                                    else:
+                                        await whatsapp_service.engineer_reject_assignment(db, sender_phone, match.group(1), match.group(2) or "Reassignment required")
+
+                            elif re.match(r"^start(?:\s+work)?\s+([a-zA-Z0-9\-_]+)", lower_text):
+                                match = re.match(r"^start(?:\s+work)?\s+([a-zA-Z0-9\-_]+)", raw_text, re.IGNORECASE)
+                                if match:
+                                    if user_role not in ("engineer", "admin"):
+                                        await whatsapp_service.send_text_message(
+                                            sender_phone,
+                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account. Reply 'engineer login <passcode>' to authenticate."
+                                        )
+                                    else:
+                                        await whatsapp_service.engineer_start_work(db, sender_phone, match.group(1))
+
+                            elif re.match(r"^update\s+([a-zA-Z0-9\-_]+)\s+(.+)", lower_text):
+                                match = re.match(r"^update\s+([a-zA-Z0-9\-_]+)\s+(.+)", raw_text, re.IGNORECASE)
+                                if match:
+                                    if user_role not in ("engineer", "admin"):
+                                        await whatsapp_service.send_text_message(
+                                            sender_phone,
+                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account. Reply 'engineer login <passcode>' to authenticate."
+                                        )
+                                    else:
+                                        await whatsapp_service.engineer_update_progress(db, sender_phone, match.group(1), match.group(2))
+
+                            elif re.match(r"^resolve\s+([a-zA-Z0-9\-_]+)", lower_text):
+                                match = re.match(r"^resolve\s+([a-zA-Z0-9\-_]+)", raw_text, re.IGNORECASE)
+                                if match:
+                                    if user_role not in ("engineer", "admin"):
+                                        await whatsapp_service.send_text_message(
+                                            sender_phone,
+                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account. Reply 'engineer login <passcode>' to authenticate."
+                                        )
+                                    else:
+                                        await whatsapp_service.engineer_resolve_incident(db, sender_phone, match.group(1))
+
+                            # D. Citizen Tracking
+                            elif re.search(r"\b(?:track|status)\s+([a-zA-Z0-9\-_]+)", lower_text) or re.search(r"status of\s+([a-zA-Z0-9\-_]+)", lower_text):
+                                match = re.search(r"\b(?:track|status)\s+([a-zA-Z0-9\-_]+)", raw_text, re.IGNORECASE) or re.search(r"status of\s+([a-zA-Z0-9\-_]+)", raw_text, re.IGNORECASE)
                                 if match:
                                     target_id = match.group(1).strip()
                                     await whatsapp_service.track_incident(db, sender_phone, target_id)
 
-                            # Text Confirmation of Pending Draft
+                            # E. Citizen History
+                            elif lower_text in ("show my complaints", "my complaints", "my tickets", "check my complaints", "list my complaints", "my reports"):
+                                await whatsapp_service.get_citizen_complaint_history(db, sender_phone)
+
+                            # F. Citizen Escalation
+                            elif re.match(r"^escalate\s+([a-zA-Z0-9\-_]+)", lower_text):
+                                match = re.match(r"^escalate\s+([a-zA-Z0-9\-_]+)(?:\s+(.*))?", raw_text, re.IGNORECASE)
+                                if match:
+                                    await whatsapp_service.escalate_incident(db, sender_phone, match.group(1), match.group(2) or "Delay in resolution")
+
+                            # G. Citizen Feedback / Rating
+                            elif re.match(r"^rate\s+([a-zA-Z0-9\-_]+)\s+([1-5])", lower_text):
+                                match = re.match(r"^rate\s+([a-zA-Z0-9\-_]+)\s+([1-5])(?:\s+(.*))?", raw_text, re.IGNORECASE)
+                                if match:
+                                    await whatsapp_service.record_citizen_feedback(db, sender_phone, match.group(1), int(match.group(2)), match.group(3))
+
+                            elif re.match(r"^feedback\s+([a-zA-Z0-9\-_]+)\s+(.+)", lower_text):
+                                match = re.match(r"^feedback\s+([a-zA-Z0-9\-_]+)\s+(.+)", raw_text, re.IGNORECASE)
+                                if match:
+                                    await whatsapp_service.record_citizen_feedback(db, sender_phone, match.group(1), 5, match.group(2))
+
+                            # H. Confirmation of Pending Draft
                             elif lower_text in ("confirm", "yes", "proceed", "submit", "confirm & submit"):
                                 await whatsapp_service.execute_confirmation_reply(db, sender_phone)
 
-                            # Text Cancellation of Pending Draft
+                            # I. Cancellation of Pending Draft
                             elif lower_text in ("cancel", "no", "discard", "stop"):
                                 await whatsapp_service.execute_cancellation_reply(sender_phone)
 
-                            # Conversational Assistance via Gemini
+                            # J. Address Update for Pending Draft
+                            elif whatsapp_service.pending_sessions.get_draft(sender_phone) and (
+                                lower_text.startswith("address:") or lower_text.startswith("location:") or
+                                lower_text.startswith("near ") or lower_text.startswith("at ") or lower_text.startswith("in ")
+                            ):
+                                await whatsapp_service.update_draft_address(sender_phone, raw_text)
+
+                            # K. Greetings & Help
+                            elif lower_text in ("hi", "hello", "hey", "start", "help", "menu", "namaste", "hi!") or lower_text.startswith("hi "):
+                                await whatsapp_service.send_text_message(sender_phone, WELCOME_MESSAGE)
+
+                            # L. Conversational Complaint Initiation (Civic problem keywords)
+                            elif any(k in lower_text for k in (
+                                "pothole", "crater", "garbage", "trash", "waste", "water leak", "pipe burst", "leak",
+                                "streetlight", "light pole", "drain", "drainage", "sewer", "sinkhole", "road damage",
+                                "broken road", "water pipe", "flooding", "manhole"
+                            )):
+                                await whatsapp_service.handle_conversational_text_draft(sender_phone, raw_text)
+
+                            # M. General Conversational Civic Assistance via Gemini 2.5 Flash
                             else:
                                 reply = await whatsapp_service.generate_conversational_reply(sender_phone, raw_text)
                                 await whatsapp_service.send_text_message(sender_phone, reply)
 
                         # ------------------------------------------------------
-                        # 3. Image Messages (Gemini Vision Complaint Reporting)
+                        # 3. Image Messages (Complaint Reporting, Resolution Evidence, or Supplemental Photo)
                         # ------------------------------------------------------
                         elif msg.type == "image" and msg.image:
                             try:
-                                # Authenticated download from Meta Graph API
                                 image_bytes, mime = await whatsapp_service.download_media(msg.image.id)
                             except Exception as dl_err:
                                 logger.warning("Could not download media %s from Meta (%s).", msg.image.id, dl_err)
-                                # Resilient fallback in development/test if live media download fails
                                 image_bytes = b"\xFF\xD8\xFF\xE0\x00\x10JFIF" + b"\x00" * 200
 
-                            await whatsapp_service.handle_photo_report(
-                                sender_phone=sender_phone,
-                                image_bytes=image_bytes,
-                                caption=msg.image.caption
-                            )
+                            caption = (msg.image.caption or "").strip()
+                            cap_lower = caption.lower()
+
+                            # If engineer caption contains "resolve <ID>"
+                            if re.search(r"resolve\s+([a-zA-Z0-9\-_]+)", cap_lower):
+                                match = re.search(r"resolve\s+([a-zA-Z0-9\-_]+)", caption, re.IGNORECASE)
+                                if match:
+                                    safe_fn = f"resolved_{int(time.time())}_{uuid.uuid4().hex[:6]}.jpg"
+                                    upload_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
+                                    os.makedirs(upload_dir, exist_ok=True)
+                                    file_path = os.path.join(upload_dir, safe_fn)
+                                    with open(file_path, "wb") as f:
+                                        f.write(image_bytes)
+                                    await whatsapp_service.engineer_resolve_incident(
+                                        db, sender_phone, match.group(1), photo_url=f"/uploads/{safe_fn}", notes="Resolution photo uploaded."
+                                    )
+                                else:
+                                    await whatsapp_service.handle_photo_report(sender_phone=sender_phone, image_bytes=image_bytes, caption=caption)
+
+                            # If caption contains "evidence <ID>"
+                            elif re.search(r"evidence\s+(?:for\s+)?([a-zA-Z0-9\-_]+)", cap_lower):
+                                match = re.search(r"evidence\s+(?:for\s+)?([a-zA-Z0-9\-_]+)", caption, re.IGNORECASE)
+                                if match:
+                                    await whatsapp_service.submit_additional_evidence(db, sender_phone, match.group(1), image_bytes, caption)
+                                else:
+                                    await whatsapp_service.handle_photo_report(sender_phone=sender_phone, image_bytes=image_bytes, caption=caption)
+
+                            # Default: New Complaint Photo Report
+                            else:
+                                await whatsapp_service.handle_photo_report(
+                                    sender_phone=sender_phone,
+                                    image_bytes=image_bytes,
+                                    caption=caption
+                                )
 
                         # ------------------------------------------------------
                         # 4. Location Messages
@@ -279,20 +433,17 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                         elif msg.type == "location" and msg.location:
                             draft = whatsapp_service.pending_sessions.get_draft(sender_phone)
                             if draft:
-                                draft["lat"] = msg.location.latitude
-                                draft["lng"] = msg.location.longitude
-                                if msg.location.name or msg.location.address:
-                                    draft["address"] = msg.location.address or msg.location.name
-                                whatsapp_service.pending_sessions.store_draft(sender_phone, draft)
-                                await whatsapp_service.send_text_message(
+                                loc_addr = msg.location.address or msg.location.name
+                                await whatsapp_service.update_draft_location(
                                     sender_phone,
-                                    f"📍 Location updated ({msg.location.latitude:.4f}, {msg.location.longitude:.4f}). "
-                                    "Reply *CONFIRM* to submit your complaint."
+                                    lat=msg.location.latitude,
+                                    lng=msg.location.longitude,
+                                    address=loc_addr
                                 )
                             else:
                                 await whatsapp_service.send_text_message(
                                     sender_phone,
-                                    "📍 Location received! Please send a photograph of the civic issue to file a formal report."
+                                    "📍 Location received! Please send a photograph or description of the civic problem to file a report."
                                 )
 
                         # ------------------------------------------------------

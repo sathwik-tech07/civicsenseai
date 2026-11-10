@@ -116,23 +116,52 @@ class WorkflowService:
 
         # Automated Outbound WhatsApp Status Notification for Citizen
         try:
+            from app.services.whatsapp_service import whatsapp_service
+            stage_display = target_stage.replace('_', ' ').title()
+
             if incident.user_id and incident.user_id.startswith("usr-wa-"):
                 phone = incident.user_id[len("usr-wa-"):]
-                from app.services.whatsapp_service import whatsapp_service
-                stage_display = target_stage.replace('_', ' ').title()
-                msg = (
-                    f"📢 *CivicSense Incident Update*\n\n"
-                    f"• Complaint ID: `{incident_id}`\n"
-                    f"• New Stage: *{stage_display}*\n"
-                    f"• Department: {department}\n"
-                    f"• Notes: {notes or 'No additional notes'}\n\n"
-                    f"Reply 'track {incident_id}' anytime for full progress."
-                )
+                if target_stage == "resolved":
+                    msg = (
+                        f"✅ *CivicSense Incident Resolved!*\n\n"
+                        f"• Complaint ID: `{incident_id}`\n"
+                        f"• Stage: *Resolved*\n"
+                        f"• Department: {department}\n"
+                        f"• Notes: {notes or 'Repairs completed and site verified'}\n\n"
+                        f"⭐ Please reply with a rating (e.g. *rate {incident_id} 5*) or feedback to let us know how we did!"
+                    )
+                else:
+                    msg = (
+                        f"📢 *CivicSense Incident Update*\n\n"
+                        f"• Complaint ID: `{incident_id}`\n"
+                        f"• New Stage: *{stage_display}*\n"
+                        f"• Department: {department}\n"
+                        f"• Notes: {notes or 'No additional notes'}\n\n"
+                        f"Reply 'track {incident_id}' anytime for full progress."
+                    )
                 try:
                     loop = asyncio.get_running_loop()
                     loop.create_task(whatsapp_service.send_text_message(phone, msg))
                 except RuntimeError:
                     asyncio.run(whatsapp_service.send_text_message(phone, msg))
+
+            # Automated Outbound WhatsApp Assignment Notification for Field Engineer
+            if (target_stage == "crew_assigned" or assigned_engineer_id) and incident.assigned_engineer_id:
+                if incident.assigned_engineer_id.startswith("usr-wa-"):
+                    eng_phone = incident.assigned_engineer_id[len("usr-wa-"):]
+                    eng_msg = (
+                        f"📋 *New Municipal Work Order Assigned*\n\n"
+                        f"• Incident ID: `{incident_id}`\n"
+                        f"• Category: {incident.type.replace('_', ' ').title()}\n"
+                        f"• Priority: {incident.priority_score}/100\n"
+                        f"• Location: {incident.address}\n\n"
+                        f"Reply *accept {incident_id}* to confirm or *start work {incident_id}* when on site."
+                    )
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(whatsapp_service.send_text_message(eng_phone, eng_msg))
+                    except RuntimeError:
+                        asyncio.run(whatsapp_service.send_text_message(eng_phone, eng_msg))
         except Exception:
             pass
 
