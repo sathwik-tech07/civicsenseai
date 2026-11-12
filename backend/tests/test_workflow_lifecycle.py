@@ -430,6 +430,122 @@ class TestWorkflowLifecycle(unittest.TestCase):
             self.db.delete(inc)
             self.db.commit()
 
+    def test_04_notifications_api_and_lifecycle(self):
+        """
+        Regression tests for Notification API:
+        1. When notifications table is empty, GET /api/v1/workflow/notifications returns [] with HTTP 200.
+        2. No obsolete demo-seeding occurs and no foreign key violation is raised.
+        3. Real notifications created for a valid incident are accurately retrieved.
+        4. PUT /api/v1/workflow/notifications/{id}/read and PUT /api/v1/workflow/notifications/read-all work properly.
+        """
+        # Ensure clean initial state by clearing notifications table
+        self.db.query(Notification).delete()
+        self.db.commit()
+
+        # 1. Empty table test: must return HTTP 200 with empty list []
+        res_empty = self.client.get(
+            "/api/v1/workflow/notifications",
+            headers={"Authorization": f"Bearer {self.cit_token}"}
+        )
+        self.assertEqual(res_empty.status_code, 200)
+        self.assertEqual(res_empty.json(), [])
+
+        # Verify that no phantom demo notifications were inserted
+        count_in_db = self.db.query(Notification).count()
+        self.assertEqual(count_in_db, 0)
+
+        # 2. Create a genuine incident to attach notifications to
+        test_inc = Incident(
+            id=f"INC-TEST-NOTIF-{uuid.uuid4().hex[:6]}",
+            title="Notification Regression Pipeline Rupture",
+            type="water_leak",
+            severity="critical",
+            status="reported",
+            ward_id="w-1",
+            ward_name="Ward 1",
+            lat=12.9716,
+            lng=77.5946,
+            address="Test Notification Corridor",
+            photo_url="/uploads/test_notif_pipeline.jpg",
+            user_id=self.citizen.id,
+            created_at=datetime.datetime.utcnow()
+        )
+        self.db.add(test_inc)
+        self.db.commit()
+
+        try:
+            # Create a notification for the genuine incident via staff endpoint
+            res_create = self.client.post(
+                "/api/v1/workflow/notifications/create",
+                json={
+                    "incident_id": test_inc.id,
+                    "type": "INCIDENT_CREATED",
+                    "title": "Pipeline Emergency Notification",
+                    "message": "Immediate crew dispatch requested for pipeline rupture."
+                },
+                headers={"Authorization": f"Bearer {self.com_token}"}
+            )
+            self.assertEqual(res_create.status_code, 200)
+            created_data = res_create.json()
+            notif_id = created_data["id"]
+
+            # Query notifications again: should contain the created notification
+            res_list = self.client.get(
+                "/api/v1/workflow/notifications",
+                headers={"Authorization": f"Bearer {self.cit_token}"}
+            )
+            self.assertEqual(res_list.status_code, 200)
+            notifs = res_list.json()
+            self.assertEqual(len(notifs), 1)
+            self.assertEqual(notifs[0]["id"], notif_id)
+            self.assertEqual(notifs[0]["incidentId"], test_inc.id)
+            self.assertEqual(notifs[0]["type"], "INCIDENT_CREATED")
+            self.assertEqual(notifs[0]["title"], "Pipeline Emergency Notification")
+            self.assertFalse(notifs[0]["read"])
+
+            # 3. Mark individual notification read
+            res_read = self.client.put(
+                f"/api/v1/workflow/notifications/{notif_id}/read",
+                headers={"Authorization": f"Bearer {self.cit_token}"}
+            )
+            self.assertEqual(res_read.status_code, 200)
+            self.assertTrue(res_read.json().get("read"))
+
+            # Verify notification is marked read in DB
+            db_notif = self.db.query(Notification).filter(Notification.id == notif_id).first()
+            self.assertTrue(db_notif.read)
+
+            # 4. Mark all read
+            # Add a second unread notification
+            res_create2 = self.client.post(
+                "/api/v1/workflow/notifications/create",
+                json={
+                    "incident_id": test_inc.id,
+                    "type": "CREW_ASSIGNED",
+                    "title": "Crew En Route",
+                    "message": "Field unit dispatched to pipeline site."
+                },
+                headers={"Authorization": f"Bearer {self.com_token}"}
+            )
+            self.assertEqual(res_create2.status_code, 200)
+
+            res_read_all = self.client.put(
+                "/api/v1/workflow/notifications/read-all",
+                headers={"Authorization": f"Bearer {self.cit_token}"}
+            )
+            self.assertEqual(res_read_all.status_code, 200)
+            self.assertEqual(res_read_all.json(), {"status": "success"})
+
+            # Verify all notifications are now read
+            unread_count = self.db.query(Notification).filter(Notification.read == False).count()
+            self.assertEqual(unread_count, 0)
+
+        finally:
+            # Cleanup
+            self.db.query(Notification).filter(Notification.incident_id == test_inc.id).delete()
+            self.db.delete(test_inc)
+            self.db.commit()
+
 
 if __name__ == "__main__":
     unittest.main()

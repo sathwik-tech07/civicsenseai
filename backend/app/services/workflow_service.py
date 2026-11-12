@@ -269,28 +269,6 @@ class WorkflowService:
 
     @staticmethod
     def get_notifications(db: Session) -> List[Dict[str, Any]]:
-        count = db.query(Notification).count()
-        if count == 0:
-            # Seed initial notifications for demo
-            seed_notifs = [
-                ("INC-2026-CRITICAL-01", "INCIDENT_CREATED", "New Critical Water Main Defect Reported", "Ward 4 Kaveri Water Trunk Burst submitted by Citizen Priya Sharma"),
-                ("INC-2026-CRITICAL-01", "AI_ANALYSIS_COMPLETE", "AI Vision Multimodal Analysis Complete", "Structural cavity detected with 98% priority score near Victoria Hospital"),
-                ("INC-2026-HIGH-02", "CREW_ASSIGNED", "Rapid Crew Alpha-4 Assigned", "Crew Bravo-2 Rapid Response dispatched with Cold Patch Asphalt equipment"),
-                ("INC-2026-HIGH-02", "REPAIR_STARTED", "Field Repair Work Underway", "Sub-surface asphalt shear work started in Ward 2 Heritage Commercial Hub"),
-                ("INC-2026-MED-03", "PDF_GENERATED", "Official PDF Audit Report Generated", "AI Investigation Report generated for Stormwater Drain Grate Blockage"),
-            ]
-            for inc_id, ntype, title, msg in seed_notifs:
-                db.add(Notification(
-                    id=f"notif_{uuid.uuid4().hex[:10]}",
-                    incident_id=inc_id,
-                    type=ntype,
-                    title=title,
-                    message=msg,
-                    timestamp=datetime.datetime.utcnow() - datetime.timedelta(minutes=30),
-                    read=False
-                ))
-            db.commit()
-
         notifs = db.query(Notification).order_by(Notification.timestamp.desc()).limit(50).all()
         return [
             {
@@ -299,7 +277,7 @@ class WorkflowService:
                 "type": n.type,
                 "title": n.title,
                 "message": n.message,
-                "timestamp": n.timestamp.isoformat() + "Z",
+                "timestamp": (n.timestamp.isoformat() + "Z") if n.timestamp else "",
                 "read": n.read
             }
             for n in notifs
