@@ -79,3 +79,40 @@ class Token(BaseModel):
     refresh_token: Optional[str] = None
     token_type: str = "bearer"
     user: UserData
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    token: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def check_password_length(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters long.")
+        return validate_password_bytes(v)
+
+class StaffUserCreate(BaseModel):
+    email: EmailStr
+    full_name: str
+    password: str
+    role: str
+    department: str
+
+    @field_validator("password")
+    @classmethod
+    def check_password_length(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters long.")
+        return validate_password_bytes(v)
+
+    @field_validator("role")
+    @classmethod
+    def check_role(cls, v: str) -> str:
+        r = v.strip().lower()
+        if r not in ("engineer", "commissioner", "admin", "citizen"):
+            raise ValueError("Invalid role. Must be 'engineer', 'commissioner', 'admin', or 'citizen'.")
+        return r

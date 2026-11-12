@@ -8,7 +8,11 @@ from app.config import settings
 from app.database import get_db
 from app.models.incident import Incident
 from app.models.ai_analysis import AIAnalysis
-from app.schemas.incident import IncidentCreate, IncidentUpdate, IncidentResponse
+from app.models.workflow import WorkflowHistory, AuditLog, Notification
+from app.schemas.incident import (
+    IncidentCreate, IncidentUpdate, IncidentResponse,
+    CitizenEscalateRequest, CitizenFeedbackRequest, CitizenAdditionalEvidenceRequest
+)
 from app.models.user import User
 from app.utils.dependencies import (
     get_current_user,
@@ -200,6 +204,32 @@ def create_incident(
     )
     db.add(new_inc)
 
+    # Spatial Duplicate Detection: Check for open complaints of matching category within ~150 meters
+    duplicate_count = 0
+    try:
+        if incident_in.lat and incident_in.lng:
+            import math
+            def haversine_distance_m(lat1, lon1, lat2, lon2):
+                R = 6371000
+                phi1, phi2 = math.radians(lat1), math.radians(lat2)
+                dphi = math.radians(lat2 - lat1)
+                dlam = math.radians(lon2 - lon1)
+                a = math.sin(dphi / 2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2)**2
+                return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+            nearby_open = db.query(Incident).filter(
+                Incident.status != "resolved",
+                Incident.type == incident_in.type
+            ).all()
+
+            for cand in nearby_open:
+                if cand.lat and cand.lng:
+                    dist = haversine_distance_m(incident_in.lat, incident_in.lng, cand.lat, cand.lng)
+                    if dist <= 150:
+                        duplicate_count += 1
+    except Exception:
+        duplicate_count = 0
+
     # Persist structured AI Analysis record linked to this incident
     ai_record = AIAnalysis(
         id=f"AIA-{uuid.uuid4().hex[:8].upper()}",
@@ -209,7 +239,7 @@ def create_incident(
         hospital_proximity_meters=340,
         hospital_name="Victoria Municipal Hospital",
         road_classification="Primary Arterial Corridor",
-        duplicate_complaints_count=0,
+        duplicate_complaints_count=duplicate_count,
         estimated_daily_traffic=14500,
         historical_failure_rate=78.5,
         weather_risk_factor="Monsoon Precipitation Runoff",
@@ -275,6 +305,155 @@ def update_incident(
     db.commit()
     db.refresh(incident)
     return incident
+
+@router.post("/{incident_id}/escalate")
+def escalate_incident(
+    incident_id: str,
+    req: CitizenEscalateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Allows the citizen who submitted the complaint to request priority escalation.
+    Staff and commissioners can also escalate complaints during operational triage.
+    """
+    incident = db.query(Incident).filter(Incident.id == incident_id).first()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    if current_user.role == "citizen" and incident.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access restricted. You can only request escalation for your own complaints."
+        )
+
+    # Bump priority score by 10 points (max 100)
+    incident.priority_score = min(100, (incident.priority_score or 70) + 10)
+    if incident.status == "reported":
+        incident.status = "commissioner_review"
+
+    history = WorkflowHistory(
+        incident_id=incident_id,
+        stage=incident.status,
+        assigned_user=f"{current_user.full_name} ({current_user.role.title()})",
+        department="Office of the City Commissioner",
+        notes=f"CITIZEN ESCALATION: {req.reason.strip()}",
+        duration_seconds=0,
+        created_at=datetime.utcnow()
+    )
+    db.add(history)
+
+    audit = AuditLog(
+        incident_id=incident_id,
+        who=f"{current_user.full_name} ({current_user.role.title()})",
+        what=f"Escalated complaint '{incident_id}' to Commissioner. Reason: {req.reason.strip()}",
+        when=datetime.utcnow(),
+        result="Escalation Registered (Priority Score Increased)"
+    )
+    db.add(audit)
+
+    notif = Notification(
+        id=f"notif_{uuid.uuid4().hex[:10]}",
+        incident_id=incident_id,
+        type="emergency",
+        title=f"URGENT: Escalation for {incident_id}",
+        message=f"Citizen requested escalation: {req.reason.strip()}",
+        timestamp=datetime.utcnow(),
+        read=False
+    )
+    db.add(notif)
+
+    db.commit()
+    return {
+        "status": "success",
+        "message": f"Complaint {incident_id} escalated successfully. Supervising commissioner notified.",
+        "priority_score": incident.priority_score,
+        "current_status": incident.status
+    }
+
+@router.post("/{incident_id}/feedback")
+def submit_feedback(
+    incident_id: str,
+    req: CitizenFeedbackRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Allows the citizen who submitted the complaint to record satisfaction ratings (1-5 stars)
+    and optional feedback upon resolution.
+    """
+    incident = db.query(Incident).filter(Incident.id == incident_id).first()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    if current_user.role == "citizen" and incident.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access restricted. You can only rate your own complaints."
+        )
+
+    audit = AuditLog(
+        incident_id=incident_id,
+        who=f"{current_user.full_name} ({current_user.role.title()})",
+        what=f"Recorded satisfaction rating: {req.rating}/5 stars. Feedback: {req.comment or 'No comments provided'}",
+        when=datetime.utcnow(),
+        result="Feedback Acknowledged"
+    )
+    db.add(audit)
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": "Thank you for your feedback! Your rating has been logged in municipal QA audit.",
+        "rating": req.rating
+    }
+
+@router.post("/{incident_id}/additional-evidence")
+def attach_additional_evidence(
+    incident_id: str,
+    req: CitizenAdditionalEvidenceRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Allows the citizen or assigned staff to attach supplementary notes or photo evidence.
+    """
+    incident = db.query(Incident).filter(Incident.id == incident_id).first()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    if current_user.role == "citizen" and incident.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access restricted. You can only attach evidence to your own complaints."
+        )
+
+    notes = req.notes.strip() if req.notes else "Supplementary evidence submitted"
+    history = WorkflowHistory(
+        incident_id=incident_id,
+        stage=incident.status,
+        assigned_user=f"{current_user.full_name} ({current_user.role.title()})",
+        department="Citizen Services",
+        notes=f"ADDITIONAL EVIDENCE: {notes}",
+        duration_seconds=0,
+        created_at=datetime.utcnow()
+    )
+    db.add(history)
+
+    audit = AuditLog(
+        incident_id=incident_id,
+        who=f"{current_user.full_name} ({current_user.role.title()})",
+        what=f"Attached supplementary evidence: {notes}",
+        when=datetime.utcnow(),
+        result="Evidence Attached"
+    )
+    db.add(audit)
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": "Supplementary evidence successfully attached to complaint dossier."
+    }
 
 @router.get("/{incident_id}/evidence")
 async def get_incident_evidence(

@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { Mail, ShieldCheck, Sparkles, ArrowRight, User, Lock, AlertCircle } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Mail, ShieldCheck, Sparkles, ArrowRight, User, Lock, AlertCircle, KeyRound, X, Check } from 'lucide-react';
 import { useAuth, type UserRole } from '../context/AuthContext';
+import { apiForgotPassword, apiResetPassword } from '../services/apiClient';
 
 interface LoginPageProps {
   onLoginSuccess?: (role: UserRole) => void;
 }
+
+const isProd = import.meta.env.PROD;
 
 const ROLES: { id: UserRole; label: string; icon: string; desc: string }[] = [
   { id: 'commissioner', label: 'Commissioner', icon: '🏛️', desc: 'Executive Command & War Room' },
@@ -14,37 +17,81 @@ const ROLES: { id: UserRole; label: string; icon: string; desc: string }[] = [
   { id: 'admin',        label: 'Administrator', icon: '⚡', desc: 'Ward Analytics & System Control' },
 ];
 
-export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
-  const { login, signup, loginUser } = useAuth();
-  const isDev = Boolean(import.meta.env.DEV);
+const ROLE_PRESETS: Record<UserRole, { name: string; email: string; defaultPassword?: string }> = {
+  commissioner: { name: 'Dr. Anita Roy', email: 'commissioner@civicsense.ai', defaultPassword: isProd ? '' : 'password123' },
+  engineer: { name: 'Eng. Rajesh V', email: 'engineer@civicsense.ai', defaultPassword: isProd ? '' : 'password123' },
+  citizen: { name: 'Priya Sharma', email: 'citizen@civicsense.ai', defaultPassword: isProd ? '' : 'password123' },
+  admin: { name: 'System Administrator', email: 'admin@civicsense.ai', defaultPassword: isProd ? '' : 'password123' },
+};
 
-  const [selectedRole, setSelectedRole] = useState<UserRole>(isDev ? 'commissioner' : 'citizen');
-  const [fullName, setFullName] = useState(isDev ? 'Dr. Anita Roy' : '');
-  const [email, setEmail] = useState(isDev ? 'commissioner@civicsense.ai' : '');
-  const [password, setPassword] = useState(isDev ? 'password123' : '');
+export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
+  const { signup, loginUser } = useAuth();
+
+  const [selectedRole, setSelectedRole] = useState<UserRole>('commissioner');
+  const [fullName, setFullName] = useState('Dr. Anita Roy');
+  const [email, setEmail] = useState('commissioner@civicsense.ai');
+  const [password, setPassword] = useState(isProd ? '' : 'password123');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
 
-  const DEV_ROLE_PRESETS: Record<UserRole, { name: string; email: string }> | null = isDev
-    ? {
-        commissioner: { name: 'Dr. Anita Roy', email: 'commissioner@civicsense.ai' },
-        engineer: { name: 'Eng. Rajesh V', email: 'engineer@civicsense.ai' },
-        citizen: { name: 'Priya Sharma', email: 'citizen@civicsense.ai' },
-        admin: { name: 'System Administrator', email: 'admin@civicsense.ai' },
-      }
-    : null;
+  // Password Recovery State
+  const [showRecoveryModal, setShowRecoveryModal] = useState(false);
+  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [recoveryToken, setRecoveryToken] = useState('');
+  const [recoveryNewPassword, setRecoveryNewPassword] = useState('');
+  const [recoveryStep, setRecoveryStep] = useState<1 | 2>(1);
+  const [recoveryMsg, setRecoveryMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [isRecovering, setIsRecovering] = useState(false);
 
   const handleRoleSelect = (role: UserRole) => {
     setSelectedRole(role);
     setErrorMsg(null);
-    if (isDev && DEV_ROLE_PRESETS) {
-      const preset = DEV_ROLE_PRESETS[role];
-      if (preset) {
-        setFullName(preset.name);
-        setEmail(preset.email);
-        setPassword('password123');
+    if (isSignUp) setIsSignUp(false);
+    const preset = ROLE_PRESETS[role];
+    if (preset) {
+      setFullName(preset.name);
+      setEmail(preset.email);
+      setPassword(isProd ? '' : (preset.defaultPassword || ''));
+    }
+  };
+
+  const handleRequestRecovery = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRecoveryMsg(null);
+    setIsRecovering(true);
+    try {
+      const res = await apiForgotPassword(recoveryEmail);
+      setRecoveryMsg({ text: res.message, type: 'success' });
+      if (res.reset_token) {
+        setRecoveryToken(res.reset_token);
       }
+      setRecoveryStep(2);
+    } catch (err: any) {
+      setRecoveryMsg({ text: err.message || 'Failed to request recovery', type: 'error' });
+    } finally {
+      setIsRecovering(false);
+    }
+  };
+
+  const handleExecuteReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRecoveryMsg(null);
+    setIsRecovering(true);
+    try {
+      const res = await apiResetPassword(recoveryEmail, recoveryToken, recoveryNewPassword);
+      setRecoveryMsg({ text: res.message, type: 'success' });
+      setTimeout(() => {
+        setShowRecoveryModal(false);
+        setRecoveryStep(1);
+        setRecoveryToken('');
+        setRecoveryNewPassword('');
+        setRecoveryMsg(null);
+      }, 2500);
+    } catch (err: any) {
+      setRecoveryMsg({ text: err.message || 'Failed to reset password', type: 'error' });
+    } finally {
+      setIsRecovering(false);
     }
   };
 
@@ -55,6 +102,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
     const finalEmail = email.trim();
     const finalPassword = password;
+    const finalName = fullName.trim() || ROLE_PRESETS[selectedRole]?.name || 'Municipal User';
 
     if (!finalEmail || !finalPassword) {
       setErrorMsg('Please enter both email and password.');
@@ -63,24 +111,17 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     }
 
     try {
-      if (isDev) {
-        const finalName = fullName.trim() || (DEV_ROLE_PRESETS ? DEV_ROLE_PRESETS[selectedRole]?.name : '');
-        const user = await loginUser(finalName, finalEmail, selectedRole, finalPassword);
+      if (isSignUp) {
+        if (!finalName) {
+          setErrorMsg('Full name is required to create a citizen account.');
+          setIsSubmitting(false);
+          return;
+        }
+        const user = await signup(finalName, finalEmail, finalPassword, 'citizen');
         if (onLoginSuccess) onLoginSuccess(user.role);
       } else {
-        if (isSignUp) {
-          const finalName = fullName.trim();
-          if (!finalName) {
-            setErrorMsg('Full name is required to create a citizen account.');
-            setIsSubmitting(false);
-            return;
-          }
-          const user = await signup(finalName, finalEmail, finalPassword, 'citizen');
-          if (onLoginSuccess) onLoginSuccess(user.role);
-        } else {
-          const user = await login(finalEmail, finalPassword);
-          if (onLoginSuccess) onLoginSuccess(user.role);
-        }
+        const user = await loginUser(finalName, finalEmail, selectedRole, finalPassword);
+        if (onLoginSuccess) onLoginSuccess(user.role);
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Incorrect email or password. Please verify credentials.');
@@ -308,88 +349,84 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                 Smart City Entry Portal
               </h2>
               <p style={{ fontSize: 12, color: '#94A3B8', margin: 0 }}>
-                {isDev
-                  ? 'Select your role and enter your details to launch your dashboard.'
-                  : (isSignUp ? 'Create a citizen account to report and track municipal issues.' : 'Enter your credentials to access the command platform.')}
+                {isSignUp
+                  ? 'Create a citizen account to report and track municipal issues.'
+                  : 'Select your operational role and enter your details to launch your command center.'}
               </p>
             </div>
 
-            {/* Development-Only Role Support Selector Tabs */}
-            {isDev && (
-              <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
-                  Select Operational Role (Development Only)
-                </div>
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(4, 1fr)',
-                  gap: 6,
-                  background: 'rgba(0, 0, 0, 0.4)',
-                  padding: 4,
-                  borderRadius: 14,
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
-                }}>
-                  {ROLES.map((r) => {
-                    const isSelected = selectedRole === r.id;
-                    return (
-                      <button
-                        key={r.id}
-                        type="button"
-                        onClick={() => handleRoleSelect(r.id)}
-                        style={{
-                          padding: '8px 6px',
-                          borderRadius: 10,
-                          background: isSelected ? 'linear-gradient(135deg, rgba(0, 212, 255, 0.2), rgba(139, 92, 246, 0.2))' : 'transparent',
-                          border: isSelected ? '1px solid #00D4FF' : '1px solid transparent',
-                          color: isSelected ? '#00D4FF' : '#94A3B8',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                          gap: 2,
-                          transition: 'all 0.2s',
-                        }}
-                      >
-                        <span style={{ fontSize: 16 }}>{r.icon}</span>
-                        <span style={{ fontSize: 10, fontWeight: isSelected ? 800 : 600 }}>{r.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+            {/* Permanent Operational Role Support Selector Tabs */}
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
+                Select Operational Role
               </div>
-            )}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(4, 1fr)',
+                gap: 6,
+                background: 'rgba(0, 0, 0, 0.4)',
+                padding: 4,
+                borderRadius: 14,
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+              }}>
+                {ROLES.map((r) => {
+                  const isSelected = selectedRole === r.id;
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() => handleRoleSelect(r.id)}
+                      style={{
+                        padding: '8px 6px',
+                        borderRadius: 10,
+                        background: isSelected ? 'linear-gradient(135deg, rgba(0, 212, 255, 0.2), rgba(139, 92, 246, 0.2))' : 'transparent',
+                        border: isSelected ? '1px solid #00D4FF' : '1px solid transparent',
+                        color: isSelected ? '#00D4FF' : '#94A3B8',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: 2,
+                        transition: 'all 0.2s',
+                      }}
+                    >
+                      <span style={{ fontSize: 16 }}>{r.icon}</span>
+                      <span style={{ fontSize: 10, fontWeight: isSelected ? 800 : 600 }}>{r.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             {/* Form */}
             <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              {/* Full Name Field (Always in dev; required on citizen signup in prod) */}
-              {(isDev || isSignUp) && (
-                <div>
-                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#F8FAFC', marginBottom: 6 }}>
-                    Full Name <span style={{ color: '#00D4FF' }}>*</span>
-                  </label>
-                  <div style={{ position: 'relative' }}>
-                    <User size={16} color="#00D4FF" style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)' }} />
-                    <input
-                      type="text"
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
-                      placeholder={isDev ? "e.g. Dr. Anita Roy" : "e.g. Priya Sharma"}
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '11px 14px 11px 40px',
-                        background: 'rgba(0, 0, 0, 0.4)',
-                        border: '1px solid rgba(0, 212, 255, 0.25)',
-                        borderRadius: 12,
-                        color: '#F8FAFC',
-                        fontSize: 13,
-                        outline: 'none',
-                        boxSizing: 'border-box',
-                      }}
-                    />
-                  </div>
+              {/* Full Name Field */}
+              <div>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#F8FAFC', marginBottom: 6 }}>
+                  Full Name <span style={{ color: '#00D4FF' }}>*</span>
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <User size={16} color="#00D4FF" style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)' }} />
+                  <input
+                    type="text"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="e.g. Dr. Anita Roy"
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '11px 14px 11px 40px',
+                      background: 'rgba(0, 0, 0, 0.4)',
+                      border: '1px solid rgba(0, 212, 255, 0.25)',
+                      borderRadius: 12,
+                      color: '#F8FAFC',
+                      fontSize: 13,
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                    }}
+                  />
                 </div>
-              )}
+              </div>
 
               {/* Email Field */}
               <div>
@@ -402,7 +439,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder={isDev ? "name@civicsense.ai" : "Enter your email address"}
+                    placeholder="name@civicsense.ai"
                     required
                     style={{
                       width: '100%',
@@ -430,7 +467,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder={isDev ? "••••••••" : "Enter your password"}
+                    placeholder="••••••••"
                     required
                     style={{
                       width: '100%',
@@ -445,6 +482,30 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                     }}
                   />
                 </div>
+                {!isSignUp && (
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRecoveryEmail(email);
+                        setRecoveryMsg(null);
+                        setRecoveryStep(1);
+                        setShowRecoveryModal(true);
+                      }}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#00D4FF',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        padding: 0,
+                      }}
+                    >
+                      Forgot Password?
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Error Message Display */}
@@ -493,68 +554,288 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                 <ArrowRight size={18} />
               </button>
 
-              {/* Citizen Registration / Sign-in Toggle (Production Only) */}
-              {!isDev && (
-                <div style={{ marginTop: 10, textAlign: 'center' }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsSignUp(!isSignUp);
-                      setErrorMsg(null);
-                    }}
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      color: '#00D4FF',
-                      fontSize: 12,
-                      cursor: 'pointer',
-                      textDecoration: 'underline',
-                      padding: 4,
-                    }}
-                  >
-                    {isSignUp ? 'Already registered? Sign in to your account' : 'New citizen? Create an account'}
-                  </button>
-                </div>
-              )}
+              {/* Citizen Registration / Sign-in Toggle */}
+              <div style={{ marginTop: 10, textAlign: 'center' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSignUp(!isSignUp);
+                    setErrorMsg(null);
+                    if (!isSignUp) {
+                      setSelectedRole('citizen');
+                      setFullName('');
+                      setEmail('');
+                      setPassword('');
+                    } else {
+                      handleRoleSelect('commissioner');
+                    }
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#00D4FF',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
+                    padding: 4,
+                  }}
+                >
+                  {isSignUp ? 'Already registered? Sign in with role selector' : 'New citizen? Create an account'}
+                </button>
+              </div>
             </form>
           </div>
 
-          {/* Quick Demo Presets Header (Development Only) */}
-          {isDev && (
-            <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>
-                Quick Demo Role Presets (Development Only)
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
-                {ROLES.map((r) => (
-                  <button
-                    key={r.id}
-                    type="button"
-                    onClick={() => handleRoleSelect(r.id)}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: 10,
-                      background: selectedRole === r.id ? 'rgba(0, 212, 255, 0.15)' : 'rgba(255, 255, 255, 0.03)',
-                      border: selectedRole === r.id ? '1px solid #00D4FF' : '1px solid rgba(255, 255, 255, 0.08)',
-                      color: '#F8FAFC',
-                      fontSize: 11,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      textAlign: 'left',
-                    }}
-                  >
-                    <span>{r.icon}</span>
-                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.label}</span>
-                  </button>
-                ))}
-              </div>
+          {/* Quick Role Switch Presets */}
+          <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>
+              Quick Role Switch Presets
             </div>
-          )}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+              {ROLES.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => {
+                    if (isSignUp) setIsSignUp(false);
+                    handleRoleSelect(r.id);
+                  }}
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 10,
+                    background: selectedRole === r.id ? 'rgba(0, 212, 255, 0.15)' : 'rgba(255, 255, 255, 0.03)',
+                    border: selectedRole === r.id ? '1px solid #00D4FF' : '1px solid rgba(255, 255, 255, 0.08)',
+                    color: '#F8FAFC',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    textAlign: 'left',
+                  }}
+                >
+                  <span>{r.icon}</span>
+                  <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
+
+      {/* ── Password Recovery Modal ── */}
+      <AnimatePresence>
+        {showRecoveryModal && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 9999,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'rgba(0, 0, 0, 0.75)',
+              backdropFilter: 'blur(12px)',
+              padding: 20,
+            }}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              style={{
+                width: '100%',
+                maxWidth: 440,
+                background: 'linear-gradient(135deg, rgba(8, 27, 51, 0.95), rgba(15, 23, 42, 0.98))',
+                border: '1px solid rgba(0, 212, 255, 0.3)',
+                borderRadius: 24,
+                padding: '28px 24px',
+                boxShadow: '0 20px 60px rgba(0, 0, 0, 0.6), 0 0 30px rgba(0, 212, 255, 0.15)',
+                position: 'relative',
+              }}
+            >
+              {/* Close Button */}
+              <button
+                type="button"
+                onClick={() => setShowRecoveryModal(false)}
+                style={{
+                  position: 'absolute',
+                  top: 18,
+                  right: 18,
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: 10,
+                  width: 32,
+                  height: 32,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#94A3B8',
+                  cursor: 'pointer',
+                }}
+              >
+                <X size={16} />
+              </button>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                <div style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 12,
+                  background: 'linear-gradient(135deg, rgba(0, 212, 255, 0.2), rgba(139, 92, 246, 0.2))',
+                  border: '1px solid #00D4FF',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#00D4FF',
+                }}>
+                  <KeyRound size={22} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#F8FAFC', fontFamily: 'var(--font-heading)' }}>
+                    {recoveryStep === 1 ? 'Recover Password' : 'Set New Password'}
+                  </h3>
+                  <p style={{ margin: '2px 0 0', fontSize: 12, color: '#94A3B8' }}>
+                    {recoveryStep === 1 ? 'Enter your registered email address' : 'Enter the recovery token and new password'}
+                  </p>
+                </div>
+              </div>
+
+              {recoveryMsg && (
+                <div style={{
+                  padding: '10px 14px',
+                  borderRadius: 10,
+                  background: recoveryMsg.type === 'success' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                  border: recoveryMsg.type === 'success' ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(239, 68, 68, 0.4)',
+                  color: recoveryMsg.type === 'success' ? '#6EE7B7' : '#FCA5A5',
+                  fontSize: 12,
+                  marginBottom: 16,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                }}>
+                  {recoveryMsg.type === 'success' ? <Check size={16} /> : <AlertCircle size={16} />}
+                  <span>{recoveryMsg.text}</span>
+                </div>
+              )}
+
+              {recoveryStep === 1 ? (
+                <form onSubmit={handleRequestRecovery} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#F8FAFC', marginBottom: 6 }}>
+                      Email Address
+                    </label>
+                    <input
+                      type="email"
+                      value={recoveryEmail}
+                      onChange={(e) => setRecoveryEmail(e.target.value)}
+                      placeholder="user@civicsense.ai"
+                      required
+                      style={{
+                        width: '100%',
+                        padding: '11px 14px',
+                        background: 'rgba(0, 0, 0, 0.4)',
+                        border: '1px solid rgba(0, 212, 255, 0.25)',
+                        borderRadius: 12,
+                        color: '#F8FAFC',
+                        fontSize: 13,
+                        outline: 'none',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isRecovering}
+                    style={{
+                      padding: '12px',
+                      borderRadius: 12,
+                      background: 'linear-gradient(135deg, #00D4FF, #0EA5E9)',
+                      border: 'none',
+                      color: '#000',
+                      fontWeight: 800,
+                      fontSize: 13,
+                      cursor: isRecovering ? 'not-allowed' : 'pointer',
+                      marginTop: 4,
+                    }}
+                  >
+                    {isRecovering ? 'Dispatching Token...' : 'Send Recovery Token'}
+                  </button>
+                </form>
+              ) : (
+                <form onSubmit={handleExecuteReset} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#F8FAFC', marginBottom: 6 }}>
+                      Reset Token
+                    </label>
+                    <input
+                      type="text"
+                      value={recoveryToken}
+                      onChange={(e) => setRecoveryToken(e.target.value)}
+                      placeholder="Paste recovery token"
+                      required
+                      style={{
+                        width: '100%',
+                        padding: '11px 14px',
+                        background: 'rgba(0, 0, 0, 0.4)',
+                        border: '1px solid rgba(0, 212, 255, 0.25)',
+                        borderRadius: 12,
+                        color: '#F8FAFC',
+                        fontSize: 12,
+                        fontFamily: 'var(--font-mono)',
+                        outline: 'none',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#F8FAFC', marginBottom: 6 }}>
+                      New Password (min. 8 characters)
+                    </label>
+                    <input
+                      type="password"
+                      value={recoveryNewPassword}
+                      onChange={(e) => setRecoveryNewPassword(e.target.value)}
+                      placeholder="••••••••"
+                      required
+                      minLength={8}
+                      style={{
+                        width: '100%',
+                        padding: '11px 14px',
+                        background: 'rgba(0, 0, 0, 0.4)',
+                        border: '1px solid rgba(0, 212, 255, 0.25)',
+                        borderRadius: 12,
+                        color: '#F8FAFC',
+                        fontSize: 13,
+                        outline: 'none',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isRecovering}
+                    style={{
+                      padding: '12px',
+                      borderRadius: 12,
+                      background: 'linear-gradient(135deg, #10B981, #059669)',
+                      border: 'none',
+                      color: '#000',
+                      fontWeight: 800,
+                      fontSize: 13,
+                      cursor: isRecovering ? 'not-allowed' : 'pointer',
+                      marginTop: 4,
+                    }}
+                  >
+                    {isRecovering ? 'Updating Password...' : 'Confirm Password Reset'}
+                  </button>
+                </form>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

@@ -279,5 +279,95 @@ class TestAuthAndRBAC(unittest.TestCase):
             self.db.delete(inc_eng)
             self.db.commit()
 
+    def test_07_password_recovery_and_reset(self):
+        """
+        Verify password recovery flow:
+        - forgot-password request
+        - token verification
+        - password update
+        - login with updated credentials
+        """
+        email = self.test_citizen.email
+
+        # 1. Non-existent email returns generic success (prevents user enumeration)
+        res_fake = self.client.post("/api/v1/auth/forgot-password", json={"email": "nonexistent_citizen@test.com"})
+        self.assertEqual(res_fake.status_code, 200)
+        self.assertNotIn("reset_token", res_fake.json())
+
+        # 2. Existing active account receives recovery token in dev/test environment
+        res_rec = self.client.post("/api/v1/auth/forgot-password", json={"email": email})
+        self.assertEqual(res_rec.status_code, 200)
+        data = res_rec.json()
+        self.assertEqual(data["status"], "success")
+        self.assertIn("reset_token", data)
+        token = data["reset_token"]
+
+        # 3. Invalid token rejected
+        res_bad_tok = self.client.post("/api/v1/auth/reset-password", json={
+            "email": email,
+            "token": "invalid.jwt.token",
+            "new_password": "brand_new_pass123"
+        })
+        self.assertEqual(res_bad_tok.status_code, 400)
+
+        # 4. Valid token with new password updates credentials
+        res_reset = self.client.post("/api/v1/auth/reset-password", json={
+            "email": email,
+            "token": token,
+            "new_password": "brand_new_pass123"
+        })
+        self.assertEqual(res_reset.status_code, 200)
+        self.assertEqual(res_reset.json()["status"], "success")
+
+        # 4b. Reused token rejected immediately on second attempt
+        res_reuse = self.client.post("/api/v1/auth/reset-password", json={
+            "email": email,
+            "token": token,
+            "new_password": "another_new_pass123"
+        })
+        self.assertEqual(res_reuse.status_code, 400)
+        self.assertIn("Invalid or expired", res_reuse.json()["detail"])
+
+        # 4c. Expired token rejected
+        from app.utils.security import create_access_token
+        expired_tok = create_access_token(
+            {"sub": email.lower(), "type": "password_reset", "fp": "any_fp"},
+            expires_delta=datetime.timedelta(seconds=-10)
+        )
+        res_expired = self.client.post("/api/v1/auth/reset-password", json={
+            "email": email,
+            "token": expired_tok,
+            "new_password": "expired_pass_attempt123"
+        })
+        self.assertEqual(res_expired.status_code, 400)
+        self.assertIn("Invalid or expired", res_expired.json()["detail"])
+
+        # 4d. Token 15-minute lifespan verification
+        from app.utils.security import decode_access_token, create_password_reset_token
+        fresh_tok = create_password_reset_token(email, "some_hash_123")
+        payload = decode_access_token(fresh_tok)
+        self.assertIsNotNone(payload)
+        ttl_seconds = payload["exp"] - payload.get("iat", payload["exp"] - 900)
+        self.assertAlmostEqual(ttl_seconds, 900, delta=5)
+
+        # 5. Old password no longer works
+        res_old_login = self.client.post("/api/v1/auth/login", json={
+            "email": email,
+            "password": "citizen_pass123"
+        })
+        self.assertEqual(res_old_login.status_code, 401)
+
+        # 6. New password successfully logs in
+        res_new_login = self.client.post("/api/v1/auth/login", json={
+            "email": email,
+            "password": "brand_new_pass123"
+        })
+        self.assertEqual(res_new_login.status_code, 200)
+        self.assertIn("access_token", res_new_login.json())
+
+        # Reset back to original password for teardown consistency
+        self.test_citizen.hashed_password = get_password_hash("citizen_pass123")
+        self.db.commit()
+
 if __name__ == "__main__":
     unittest.main()

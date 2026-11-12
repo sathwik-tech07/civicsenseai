@@ -11,7 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.config import settings
 from app.database import engine, get_db
 from app.middleware.security_headers import SecurityHeadersMiddleware
-from app.routers import auth, incidents, ai, dashboard, reports, core_data, gis, workflow, whatsapp
+from app.routers import auth, incidents, ai, dashboard, reports, core_data, gis, workflow, whatsapp, admin
 import app.models.workflow
 
 logger = logging.getLogger("civicsense.api")
@@ -74,6 +74,7 @@ app.include_router(core_data.router, prefix=settings.API_V1_STR)
 app.include_router(gis.router, prefix=settings.API_V1_STR)
 app.include_router(workflow.router, prefix=settings.API_V1_STR)
 app.include_router(whatsapp.router, prefix=settings.API_V1_STR)
+app.include_router(admin.router, prefix=settings.API_V1_STR)
 
 @app.get("/")
 def root():

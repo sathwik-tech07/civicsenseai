@@ -49,3 +49,14 @@ class IncidentResponse(IncidentBase):
 
     class Config:
         from_attributes = True
+
+class CitizenEscalateRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500)
+
+class CitizenFeedbackRequest(BaseModel):
+    rating: int = Field(..., ge=1, le=5)
+    comment: Optional[str] = Field(None, max_length=500)
+
+class CitizenAdditionalEvidenceRequest(BaseModel):
+    notes: Optional[str] = Field(None, max_length=1000)
+    photo_url: Optional[str] = None

@@ -72,6 +72,7 @@ export interface Incident {
   estimatedRepairCost: number; // $ or ₹
   savedEarlyIntervention: number;
   assignedCrew?: string;
+  assignedEngineerId?: string;
   assignedVehicle?: string;
   assignedEquipment?: string;
   assignedMaterials?: string;

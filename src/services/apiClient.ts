@@ -482,7 +482,9 @@ function adaptBackendIncident(data: any): Incident {
     estimatedRepairCost: data.estimated_repair_cost || 85000,
     savedEarlyIntervention: data.saved_early_intervention || 250000,
     photoUrl: data.photo_url || 'https://images.unsplash.com/photo-1541888946425-d0fbb186a5b3?q=80&w=800',
+    resolvedPhotoUrl: data.resolved_photo_url || undefined,
     assignedCrew: data.assigned_crew || 'Unassigned',
+    assignedEngineerId: data.assigned_engineer_id || undefined,
     xai: {
       cvConfidence: 96.8,
       cvModel: 'YOLOv11x + RT-DETR Ensemble',
@@ -719,5 +721,215 @@ export async function apiGetMe(token?: string): Promise<any> {
   if (!res.ok) {
     throw new Error('Failed to fetch user profile');
   }
+  return await res.json();
+}
+
+/**
+ * 25. POST /api/v1/incidents/upload-image
+ * Authenticated multipart image upload for before/after work order evidence.
+ */
+export async function apiUploadIncidentImage(
+  file: File
+): Promise<{ filename: string; file_url: string; status: string; storage_provider?: string }> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await apiFetch('/incidents/upload-image', {
+    method: 'POST',
+    body: formData,
+    isProtected: true,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to upload evidence image' }));
+    throw new Error(err.detail || 'Failed to upload evidence image');
+  }
+  return await res.json();
+}
+
+/**
+ * 26. POST /api/v1/auth/forgot-password
+ */
+export async function apiForgotPassword(email: string): Promise<{ status: string; message: string; reset_token?: string }> {
+  const res = await apiFetch('/auth/forgot-password', {
+    method: 'POST',
+    isProtected: false,
+    body: JSON.stringify({ email: email.trim() }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to request recovery' }));
+    throw new Error(err.detail || 'Failed to request recovery');
+  }
+  return await res.json();
+}
+
+/**
+ * 27. POST /api/v1/auth/reset-password
+ */
+export async function apiResetPassword(email: string, token: string, newPassword: string): Promise<{ status: string; message: string }> {
+  const res = await apiFetch('/auth/reset-password', {
+    method: 'POST',
+    isProtected: false,
+    body: JSON.stringify({ email: email.trim(), token: token.trim(), new_password: newPassword }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to reset password' }));
+    throw new Error(err.detail || 'Failed to reset password');
+  }
+  return await res.json();
+}
+
+/**
+ * 28. POST /api/v1/incidents/{incident_id}/escalate
+ */
+export async function apiEscalateIncident(
+  incidentId: string,
+  reason: string
+): Promise<{ status: string; message: string; priority_score: number; current_status: string }> {
+  const res = await apiFetch(`/incidents/${incidentId}/escalate`, {
+    method: 'POST',
+    body: JSON.stringify({ reason: reason.trim() }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to escalate incident' }));
+    throw new Error(err.detail || 'Failed to escalate incident');
+  }
+  return await res.json();
+}
+
+/**
+ * 29. POST /api/v1/incidents/{incident_id}/feedback
+ */
+export async function apiSubmitFeedback(
+  incidentId: string,
+  rating: number,
+  comment?: string
+): Promise<{ status: string; message: string; rating: number }> {
+  const res = await apiFetch(`/incidents/${incidentId}/feedback`, {
+    method: 'POST',
+    body: JSON.stringify({ rating, comment: comment?.trim() || undefined }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to record feedback' }));
+    throw new Error(err.detail || 'Failed to record feedback');
+  }
+  return await res.json();
+}
+
+/**
+ * 30. POST /api/v1/incidents/{incident_id}/additional-evidence
+ */
+export async function apiAttachAdditionalEvidence(
+  incidentId: string,
+  notes?: string,
+  photoUrl?: string
+): Promise<{ status: string; message: string }> {
+  const res = await apiFetch(`/incidents/${incidentId}/additional-evidence`, {
+    method: 'POST',
+    body: JSON.stringify({ notes: notes?.trim() || undefined, photo_url: photoUrl }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to attach evidence' }));
+    throw new Error(err.detail || 'Failed to attach evidence');
+  }
+  return await res.json();
+}
+
+/**
+ * 31. GET /api/v1/admin/users
+ */
+export async function apiFetchAdminUsers(role?: string, search?: string): Promise<{
+  total: number;
+  users: Array<{
+    id: string;
+    email: string;
+    full_name: string;
+    role: string;
+    department?: string;
+    status: string;
+    is_active: boolean;
+    created_at: string;
+    updated_at?: string;
+  }>;
+}> {
+  const params = new URLSearchParams();
+  if (role && role !== 'all') params.append('role', role);
+  if (search) params.append('search', search);
+
+  const res = await apiFetch(`/admin/users?${params.toString()}`);
+  if (!res.ok) throw new Error('Failed to fetch users from municipal directory');
+  return await res.json();
+}
+
+/**
+ * 32. POST /api/v1/admin/users
+ */
+export async function apiCreateStaffUser(data: {
+  email: string;
+  fullName: string;
+  password: string;
+  role: string;
+  department: string;
+}): Promise<any> {
+  const res = await apiFetch('/admin/users', {
+    method: 'POST',
+    body: JSON.stringify({
+      email: data.email.trim(),
+      full_name: data.fullName.trim(),
+      password: data.password,
+      role: data.role.trim().toLowerCase(),
+      department: data.department.trim(),
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to create staff account' }));
+    throw new Error(err.detail || 'Failed to create staff account');
+  }
+  return await res.json();
+}
+
+/**
+ * 33. PATCH /api/v1/admin/users/{user_id}/status
+ */
+export async function apiUpdateUserStatus(userId: string, isActive: boolean): Promise<any> {
+  const res = await apiFetch(`/admin/users/${userId}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ is_active: isActive }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to update user status' }));
+    throw new Error(err.detail || 'Failed to update user status');
+  }
+  return await res.json();
+}
+
+/**
+ * 34. PATCH /api/v1/admin/users/{user_id}/role
+ */
+export async function apiUpdateUserRole(userId: string, role: string, department?: string): Promise<any> {
+  const res = await apiFetch(`/admin/users/${userId}/role`, {
+    method: 'PATCH',
+    body: JSON.stringify({ role, department }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to update user role' }));
+    throw new Error(err.detail || 'Failed to update user role');
+  }
+  return await res.json();
+}
+
+/**
+ * 35. GET /api/v1/admin/audit-logs
+ */
+export async function apiFetchPlatformAuditLogs(limit: number = 50): Promise<any[]> {
+  const res = await apiFetch(`/admin/audit-logs?limit=${limit}`);
+  if (!res.ok) throw new Error('Failed to fetch platform audit logs');
+  return await res.json();
+}
+
+/**
+ * 36. GET /api/v1/admin/system-status
+ */
+export async function apiFetchSystemTelemetry(): Promise<any> {
+  const res = await apiFetch('/admin/system-status');
+  if (!res.ok) throw new Error('Failed to fetch system telemetry');
   return await res.json();
 }

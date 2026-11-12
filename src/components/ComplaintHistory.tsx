@@ -3,9 +3,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search, Clock, MapPin, CheckCircle2, Wrench, ShieldCheck, Download,
   Navigation, Sparkles, X, ChevronLeft, ChevronRight, RefreshCw, Cpu, Truck,
-  ShieldAlert, Layers, UserCheck, SearchCode
+  ShieldAlert, Layers, UserCheck, SearchCode, Star, AlertTriangle
 } from 'lucide-react';
 import type { Incident, IncidentStatus, IncidentSeverity } from '../types';
+import { apiEscalateIncident, apiSubmitFeedback } from '../services/apiClient';
+import { useIncidents } from '../context/IncidentContext';
 
 interface ComplaintHistoryProps {
   incidents: Incident[];
@@ -56,6 +58,8 @@ export const ComplaintHistory: React.FC<ComplaintHistoryProps> = ({
   incidents,
   onSelectIncident,
 }) => {
+  const { refetchIncidents } = useIncidents();
+
   // ── Filters & Search State ──
   const [searchTerm, setSearchTerm] = useState('');
   const [quickFilter, setQuickFilter] = useState<'all' | 'pending' | 'in_progress' | 'resolved' | 'critical'>('all');
@@ -68,6 +72,54 @@ export const ComplaintHistory: React.FC<ComplaintHistoryProps> = ({
   const [liveTrackIncident, setLiveTrackIncident] = useState<Incident | null>(null);
   const [aiSummaryIncident, setAiSummaryIncident] = useState<Incident | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+
+  // Citizen Escalation & Feedback State
+  const [escalateIncident, setEscalateIncident] = useState<Incident | null>(null);
+  const [escalateReason, setEscalateReason] = useState('');
+  const [feedbackIncident, setFeedbackIncident] = useState<Incident | null>(null);
+  const [feedbackRating, setFeedbackRating] = useState(5);
+  const [feedbackComment, setFeedbackComment] = useState('');
+  const [isSubmittingCitizenAction, setIsSubmittingCitizenAction] = useState(false);
+  const [toastMsg, setToastMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  const showToast = (text: string, type: 'success' | 'error' = 'success') => {
+    setToastMsg({ text, type });
+    setTimeout(() => setToastMsg(null), 3500);
+  };
+
+  const handleExecuteEscalate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!escalateIncident || !escalateReason.trim()) return;
+    setIsSubmittingCitizenAction(true);
+    try {
+      const res = await apiEscalateIncident(escalateIncident.id, escalateReason);
+      showToast(res.message);
+      setEscalateIncident(null);
+      setEscalateReason('');
+      await refetchIncidents();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to escalate complaint', 'error');
+    } finally {
+      setIsSubmittingCitizenAction(false);
+    }
+  };
+
+  const handleExecuteFeedback = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!feedbackIncident) return;
+    setIsSubmittingCitizenAction(true);
+    try {
+      const res = await apiSubmitFeedback(feedbackIncident.id, feedbackRating, feedbackComment);
+      showToast(res.message);
+      setFeedbackIncident(null);
+      setFeedbackComment('');
+      await refetchIncidents();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to submit feedback', 'error');
+    } finally {
+      setIsSubmittingCitizenAction(false);
+    }
+  };
 
   // ── Filtered & Sorted Incidents ──
   const filteredIncidents = useMemo(() => {
@@ -841,6 +893,59 @@ Date: ${new Date().toLocaleString()}
                           <Sparkles size={14} />
                           Generate AI Summary
                         </button>
+
+                        {/* 4. Citizen Escalation (if not yet resolved) */}
+                        {inc.status !== 'resolved' && (
+                          <button
+                            onClick={() => {
+                              setEscalateIncident(inc);
+                              setEscalateReason('');
+                            }}
+                            style={{
+                              padding: '8px 14px',
+                              background: 'rgba(239, 68, 68, 0.12)',
+                              border: '1px solid rgba(239, 68, 68, 0.3)',
+                              borderRadius: 10,
+                              color: '#F87171',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 6,
+                            }}
+                          >
+                            <AlertTriangle size={14} />
+                            Escalate Priority
+                          </button>
+                        )}
+
+                        {/* 5. Citizen Satisfaction Rating & Feedback (if resolved) */}
+                        {inc.status === 'resolved' && (
+                          <button
+                            onClick={() => {
+                              setFeedbackIncident(inc);
+                              setFeedbackRating(5);
+                              setFeedbackComment('');
+                            }}
+                            style={{
+                              padding: '8px 14px',
+                              background: 'rgba(16, 185, 129, 0.12)',
+                              border: '1px solid rgba(16, 185, 129, 0.3)',
+                              borderRadius: 10,
+                              color: '#10B981',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 6,
+                            }}
+                          >
+                            <Star size={14} />
+                            Rate Resolution
+                          </button>
+                        )}
                       </div>
 
                       {/* 4. Download Report */}
@@ -1202,6 +1307,262 @@ Date: ${new Date().toLocaleString()}
         )}
       </AnimatePresence>
 
+      {/* ── MODAL 4: Citizen Escalation Modal ── */}
+      <AnimatePresence>
+        {escalateIncident && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 9999,
+              background: 'rgba(0,0,0,0.85)',
+              backdropFilter: 'blur(16px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 20,
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 10 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 10 }}
+              style={{
+                width: '100%',
+                maxWidth: 480,
+                background: 'linear-gradient(135deg, rgba(8, 27, 51, 0.95), rgba(15, 23, 42, 0.98))',
+                border: '1px solid rgba(239, 68, 68, 0.35)',
+                borderRadius: 24,
+                padding: 28,
+                boxShadow: '0 20px 60px rgba(0, 0, 0, 0.6), 0 0 30px rgba(239, 68, 68, 0.2)',
+                position: 'relative',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#F87171' }}>
+                    <AlertTriangle size={20} />
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#F8FAFC' }}>
+                      Request Urgent Escalation
+                    </h3>
+                    <p style={{ margin: 0, fontSize: 12, color: '#94A3B8' }}>
+                      Complaint: {escalateIncident.id}
+                    </p>
+                  </div>
+                </div>
+                <button onClick={() => setEscalateIncident(null)} style={{ background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer' }}>
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleExecuteEscalate} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <p style={{ margin: 0, fontSize: 13, color: '#CBD5E1', lineHeight: 1.5 }}>
+                  Escalating this ticket increases its priority score and notifies the supervising City Commissioner and departmental engineers.
+                </p>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#F8FAFC', marginBottom: 6 }}>
+                    Reason for Escalation <span style={{ color: '#EF4444' }}>*</span>
+                  </label>
+                  <textarea
+                    value={escalateReason}
+                    onChange={(e) => setEscalateReason(e.target.value)}
+                    placeholder="e.g. Defect has expanded; causing severe traffic hazard and blocking emergency access."
+                    required
+                    rows={3}
+                    style={{
+                      width: '100%',
+                      padding: '12px 14px',
+                      background: 'rgba(0,0,0,0.4)',
+                      border: '1px solid rgba(239, 68, 68, 0.3)',
+                      borderRadius: 12,
+                      color: '#F8FAFC',
+                      fontSize: 13,
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                      resize: 'none',
+                    }}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => setEscalateIncident(null)}
+                    style={{ flex: 1, padding: 12, borderRadius: 12, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#F8FAFC', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingCitizenAction}
+                    style={{ flex: 1, padding: 12, borderRadius: 12, background: 'linear-gradient(135deg, #EF4444, #DC2626)', border: 'none', color: '#fff', fontWeight: 800, cursor: isSubmittingCitizenAction ? 'not-allowed' : 'pointer' }}
+                  >
+                    {isSubmittingCitizenAction ? 'Escalating...' : 'Confirm Escalation'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── MODAL 5: Citizen Feedback & Rating Modal ── */}
+      <AnimatePresence>
+        {feedbackIncident && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 9999,
+              background: 'rgba(0,0,0,0.85)',
+              backdropFilter: 'blur(16px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 20,
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 10 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 10 }}
+              style={{
+                width: '100%',
+                maxWidth: 480,
+                background: 'linear-gradient(135deg, rgba(8, 27, 51, 0.95), rgba(15, 23, 42, 0.98))',
+                border: '1px solid rgba(16, 185, 129, 0.35)',
+                borderRadius: 24,
+                padding: 28,
+                boxShadow: '0 20px 60px rgba(0, 0, 0, 0.6), 0 0 30px rgba(16, 185, 129, 0.2)',
+                position: 'relative',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#10B981' }}>
+                    <Star size={20} />
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#F8FAFC' }}>
+                      Citizen Satisfaction Rating
+                    </h3>
+                    <p style={{ margin: 0, fontSize: 12, color: '#94A3B8' }}>
+                      Complaint: {feedbackIncident.id}
+                    </p>
+                  </div>
+                </div>
+                <button onClick={() => setFeedbackIncident(null)} style={{ background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer' }}>
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleExecuteFeedback} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#F8FAFC', marginBottom: 8 }}>
+                    How satisfied are you with the resolution?
+                  </label>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <button
+                        key={star}
+                        type="button"
+                        onClick={() => setFeedbackRating(star)}
+                        style={{
+                          flex: 1,
+                          padding: '10px 0',
+                          borderRadius: 12,
+                          background: feedbackRating >= star ? 'rgba(245, 158, 11, 0.2)' : 'rgba(255, 255, 255, 0.04)',
+                          border: feedbackRating >= star ? '1px solid #F59E0B' : '1px solid rgba(255, 255, 255, 0.1)',
+                          color: feedbackRating >= star ? '#F59E0B' : '#64748B',
+                          fontSize: 16,
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        ★ {star}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#F8FAFC', marginBottom: 6 }}>
+                    Citizen Comments (Optional)
+                  </label>
+                  <textarea
+                    value={feedbackComment}
+                    onChange={(e) => setFeedbackComment(e.target.value)}
+                    placeholder="Share your experience with the repair quality, speed, or field crew..."
+                    rows={3}
+                    style={{
+                      width: '100%',
+                      padding: '12px 14px',
+                      background: 'rgba(0,0,0,0.4)',
+                      border: '1px solid rgba(16, 185, 129, 0.3)',
+                      borderRadius: 12,
+                      color: '#F8FAFC',
+                      fontSize: 13,
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                      resize: 'none',
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => setFeedbackIncident(null)}
+                    style={{ flex: 1, padding: 12, borderRadius: 12, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#F8FAFC', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingCitizenAction}
+                    style={{ flex: 1, padding: 12, borderRadius: 12, background: 'linear-gradient(135deg, #10B981, #059669)', border: 'none', color: '#000', fontWeight: 800, cursor: isSubmittingCitizenAction ? 'not-allowed' : 'pointer' }}
+                  >
+                    {isSubmittingCitizenAction ? 'Submitting...' : 'Submit Rating'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Action Toast Feedback ── */}
+      <AnimatePresence>
+        {toastMsg && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            style={{
+              position: 'fixed',
+              bottom: 24,
+              right: 24,
+              zIndex: 9999,
+              padding: '12px 20px',
+              borderRadius: 14,
+              background: toastMsg.type === 'success' ? '#10B981' : '#EF4444',
+              color: '#000',
+              fontWeight: 800,
+              fontSize: 13,
+              boxShadow: '0 8px 30px rgba(0,0,0,0.5)',
+            }}
+          >
+            {toastMsg.text}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

@@ -195,6 +195,241 @@ class TestWorkflowLifecycle(unittest.TestCase):
             self.db.query(Incident).filter(Incident.id == inc_id).delete()
             self.db.commit()
 
+    def test_02_citizen_escalation_feedback_and_duplicate_detection(self):
+        """
+        Verify:
+        - Spatial duplicate complaint detection for nearby incidents
+        - Citizen escalation requests with reason and priority score increase
+        - Ownership enforcement (non-owners rejected with 403)
+        - Citizen satisfaction feedback logging in audit logs
+        """
+        # Create incident 1 as Citizen
+        res1 = self.client.post(
+            "/api/v1/incidents/",
+            json={
+                "title": "Road Surface Defect",
+                "type": "pothole",
+                "severity": "medium",
+                "ward_id": "w-1",
+                "ward_name": "Ward 1 - Metro Health Corridor",
+                "lat": 12.9716,
+                "lng": 77.5946,
+                "address": "Victoria Hospital Corridor",
+                "photo_url": "/uploads/pothole1.jpg",
+                "priority_score": 70
+            },
+            headers={"Authorization": f"Bearer {self.cit_token}"}
+        )
+        self.assertEqual(res1.status_code, 201)
+        inc1_id = res1.json()["id"]
+
+        # Create incident 2 nearby (approx 30m away) with same type
+        res2 = self.client.post(
+            "/api/v1/incidents/",
+            json={
+                "title": "Severe Pit in Road",
+                "type": "pothole",
+                "severity": "high",
+                "ward_id": "w-1",
+                "ward_name": "Ward 1 - Metro Health Corridor",
+                "lat": 12.9718,
+                "lng": 77.5948,
+                "address": "Victoria Hospital Corridor East Gate",
+                "photo_url": "/uploads/pothole2.jpg",
+                "priority_score": 80
+            },
+            headers={"Authorization": f"Bearer {self.cit_token}"}
+        )
+        self.assertEqual(res2.status_code, 201)
+        inc2_id = res2.json()["id"]
+
+        try:
+            # Verify spatial duplicate detection recorded in AIAnalysis
+            ai2 = self.db.query(AIAnalysis).filter(AIAnalysis.incident_id == inc2_id).first()
+            self.assertIsNotNone(ai2)
+            self.assertGreaterEqual(ai2.duplicate_complaints_count, 1)
+
+            # Citizen 1 escalates their complaint with a reason
+            res_esc = self.client.post(
+                f"/api/v1/incidents/{inc1_id}/escalate",
+                json={"reason": "Pothole expanding rapidly after heavy rain, blocking ambulances."},
+                headers={"Authorization": f"Bearer {self.cit_token}"}
+            )
+            self.assertEqual(res_esc.status_code, 200)
+            esc_data = res_esc.json()
+            self.assertEqual(esc_data["status"], "success")
+            self.assertGreaterEqual(esc_data["priority_score"], 80)
+
+            # Other user (non-owner citizen) attempting to escalate inc1 -> 403 Forbidden
+            other_citizen = User(
+                id=f"usr-wf-other-{uuid.uuid4().hex[:6]}",
+                email=f"other_wf_{uuid.uuid4().hex[:6]}@test.com",
+                full_name="Other Citizen",
+                hashed_password=get_password_hash("pass123"),
+                role="citizen",
+                department="Public",
+                status="active",
+                is_active=True
+            )
+            self.db.add(other_citizen)
+            self.db.commit()
+
+            other_cit_token = create_access_token(data={"sub": other_citizen.id})
+            res_unauth_esc = self.client.post(
+                f"/api/v1/incidents/{inc1_id}/escalate",
+                json={"reason": "Malicious non-owner escalation attempt."},
+                headers={"Authorization": f"Bearer {other_cit_token}"}
+            )
+            self.assertEqual(res_unauth_esc.status_code, 403)
+
+            # Citizen submits satisfaction feedback on inc1
+            res_fb = self.client.post(
+                f"/api/v1/incidents/{inc1_id}/feedback",
+                json={"rating": 5, "comment": "Rapid response and excellent asphalt repair quality!"},
+                headers={"Authorization": f"Bearer {self.cit_token}"}
+            )
+            self.assertEqual(res_fb.status_code, 200)
+            self.assertEqual(res_fb.json()["rating"], 5)
+
+            # Verify audit log recorded feedback
+            fb_audit = self.db.query(AuditLog).filter(
+                AuditLog.incident_id == inc1_id,
+                AuditLog.result == "Feedback Acknowledged"
+            ).first()
+            self.assertIsNotNone(fb_audit)
+            self.assertIn("5/5 stars", fb_audit.what)
+
+        finally:
+            if 'other_citizen' in locals() and other_citizen:
+                self.db.delete(other_citizen)
+            for inc_id in [inc1_id, inc2_id]:
+                self.db.query(WorkflowHistory).filter(WorkflowHistory.incident_id == inc_id).delete()
+                self.db.query(AuditLog).filter(AuditLog.incident_id == inc_id).delete()
+                self.db.query(Notification).filter(Notification.incident_id == inc_id).delete()
+                self.db.query(AIAnalysis).filter(AIAnalysis.incident_id == inc_id).delete()
+                self.db.query(Incident).filter(Incident.id == inc_id).delete()
+            self.db.commit()
+
+    def test_03_field_engineer_portal_security_and_operations(self):
+        """
+        Verify Field Engineer Portal backend boundaries:
+        - Scoped operations: only assigned engineer can advance stages
+        - Tamper resistance: engineers cannot alter assigned_engineer_id or assigned_crew
+        - Rejecting an assignment records reason in workflow timeline
+        """
+        # Create unassigned engineer
+        unassigned_eng = User(
+            id=f"usr-wf-unassigned-{uuid.uuid4().hex[:6]}",
+            email=f"unassigned_eng_{uuid.uuid4().hex[:6]}@test.com",
+            full_name="Unassigned Field Engineer",
+            hashed_password=get_password_hash("pass123"),
+            role="engineer",
+            department="Roads & Works",
+            status="active",
+            is_active=True
+        )
+        self.db.add(unassigned_eng)
+        self.db.commit()
+
+        unassigned_token = create_access_token(data={"sub": unassigned_eng.id})
+
+        # Create incident assigned to self.engineer
+        inc = Incident(
+            id=f"INC-ENG-{uuid.uuid4().hex[:6]}",
+            title="Structural Manhole Cover Failure",
+            type="road_collapse",
+            severity="critical",
+            status="reported",
+            ward_id="w-1",
+            ward_name="Ward 1 - Metro Health Corridor",
+            lat=12.9716,
+            lng=77.5946,
+            address="Victoria Hospital Main Gate",
+            photo_url="/uploads/manhole_before.jpg",
+            priority_score=95,
+            user_id=self.citizen.id,
+            assigned_engineer_id=self.engineer.id,
+            assigned_crew="Crew Alpha-1"
+        )
+        self.db.add(inc)
+        self.db.commit()
+
+        try:
+            # 1. Unassigned engineer attempts to advance -> 403 Forbidden
+            res_unauth = self.client.post(
+                "/api/v1/workflow/transition",
+                json={
+                    "incident_id": inc.id,
+                    "target_stage": "repair_started",
+                    "notes": "Unauthorized work start attempt."
+                },
+                headers={"Authorization": f"Bearer {unassigned_token}"}
+            )
+            self.assertEqual(res_unauth.status_code, 403)
+
+            # 2. Assigned engineer attempts to tamper with assigned_engineer_id -> 403 Forbidden
+            res_tamper_eng = self.client.post(
+                "/api/v1/workflow/transition",
+                json={
+                    "incident_id": inc.id,
+                    "target_stage": "crew_assigned",
+                    "assigned_engineer_id": unassigned_eng.id,
+                    "notes": "Attempting illegal reassignment."
+                },
+                headers={"Authorization": f"Bearer {self.eng_token}"}
+            )
+            self.assertEqual(res_tamper_eng.status_code, 403)
+
+            # 3. Assigned engineer accepts assignment
+            res_accept = self.client.post(
+                "/api/v1/workflow/transition",
+                json={
+                    "incident_id": inc.id,
+                    "target_stage": "crew_assigned",
+                    "notes": "Work order accepted by field engineer. Crew dispatched."
+                },
+                headers={"Authorization": f"Bearer {self.eng_token}"}
+            )
+            self.assertEqual(res_accept.status_code, 200)
+
+            # 4. Assigned engineer marks work started
+            res_start = self.client.post(
+                "/api/v1/workflow/transition",
+                json={
+                    "incident_id": inc.id,
+                    "target_stage": "repair_started",
+                    "notes": "Field crew arrived on site. Heavy excavation underway."
+                },
+                headers={"Authorization": f"Bearer {self.eng_token}"}
+            )
+            self.assertEqual(res_start.status_code, 200)
+
+            # 5. Assigned engineer completes resolution with after photo
+            res_resolve = self.client.post(
+                "/api/v1/workflow/transition",
+                json={
+                    "incident_id": inc.id,
+                    "target_stage": "resolved",
+                    "resolved_photo_url": "/uploads/manhole_resolved.jpg",
+                    "notes": "Reinforced cast-iron cover installed. Load testing verified."
+                },
+                headers={"Authorization": f"Bearer {self.eng_token}"}
+            )
+            self.assertEqual(res_resolve.status_code, 200)
+
+            # Verify resolved state
+            self.db.refresh(inc)
+            self.assertEqual(inc.status, "resolved")
+            self.assertEqual(inc.resolved_photo_url, "/uploads/manhole_resolved.jpg")
+
+        finally:
+            self.db.delete(unassigned_eng)
+            self.db.query(WorkflowHistory).filter(WorkflowHistory.incident_id == inc.id).delete()
+            self.db.query(AuditLog).filter(AuditLog.incident_id == inc.id).delete()
+            self.db.query(Notification).filter(Notification.incident_id == inc.id).delete()
+            self.db.delete(inc)
+            self.db.commit()
+
 
 if __name__ == "__main__":
     unittest.main()

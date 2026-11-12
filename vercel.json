@@ -33,7 +33,7 @@
         },
         {
           "key": "Content-Security-Policy-Report-Only",
-          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https://images.unsplash.com https://server.arcgisonline.com https://*.tile.openstreetmap.org https://*.tile.opentopomap.org https://*.amazonaws.com; connect-src 'self' https://civicsense-ai-l9qp.onrender.com https://server.arcgisonline.com https://*.tile.openstreetmap.org https://*.tile.opentopomap.org; worker-src 'self' blob:; child-src blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https://images.unsplash.com https://server.arcgisonline.com https://*.tile.openstreetmap.org https://*.tile.opentopomap.org https://*.amazonaws.com https://*.supabase.co; connect-src 'self' https://civicsense-ai-l9qp.onrender.com https://*.supabase.co https://server.arcgisonline.com https://*.tile.openstreetmap.org https://*.tile.opentopomap.org; worker-src 'self' blob:; child-src blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
         }
       ]
     }

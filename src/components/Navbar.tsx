@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Activity, Map, Cpu, DollarSign, Smartphone, BarChart3, FileText, Rocket, PlayCircle, AlertTriangle, Box, Layers, ShieldAlert, Bell, User, Settings, HelpCircle, LogOut, ChevronDown } from 'lucide-react';
+import { Activity, Map, Cpu, DollarSign, Smartphone, BarChart3, FileText, Rocket, PlayCircle, AlertTriangle, Box, Layers, ShieldAlert, Bell, User, Settings, HelpCircle, LogOut, ChevronDown, Wrench } from 'lucide-react';
 import { useAuth, getAvatarInitials } from '../context/AuthContext';
 
 interface NavbarProps {
@@ -19,9 +19,9 @@ const ROLE_TABS: Record<string, Array<{ id: string; label: string; icon: any }>>
     { id: 'my-complaints', label: 'Track & History', icon: Layers },
   ],
   engineer: [
-    { id: 'dashboard', label: 'Assigned Incidents', icon: Activity },
+    { id: 'dashboard', label: 'Work Orders', icon: Wrench },
     { id: 'gis', label: 'Field GIS Map', icon: Map },
-    { id: 'my-complaints', label: 'Work Orders', icon: Layers },
+    { id: 'my-complaints', label: 'Incident History', icon: Layers },
   ],
   commissioner: [
     { id: 'dashboard', label: 'Command Center', icon: Activity },

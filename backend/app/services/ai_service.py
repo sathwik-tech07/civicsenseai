@@ -24,12 +24,14 @@ load_dotenv()
 def get_gemini_client(api_key_override: Optional[str] = None):
     """
     Dynamically initializes or retrieves the Gemini Client using the current configuration.
+    Uses api_version='v1beta' to support structured JSON output (response_mime_type='application/json')
+    with Gemini 2.5 Flash.
     """
     key = api_key_override or settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "")
     if not key or not genai:
         return None, key
     try:
-        return genai.Client(api_key=key), key
+        return genai.Client(api_key=key, http_options={"api_version": "v1beta"}), key
     except Exception as e:
         return None, key
 

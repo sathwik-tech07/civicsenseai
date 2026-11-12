@@ -5,8 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException, status, Header, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
-from app.schemas.user import UserCreate, UserLogin, UserResponse, Token, UserData, EngineerProvisionRequest
-from app.utils.security import verify_password, get_password_hash, create_access_token, decode_access_token
+from app.schemas.user import (
+    UserCreate, UserLogin, UserResponse, Token, UserData,
+    EngineerProvisionRequest, ForgotPasswordRequest, ResetPasswordRequest
+)
+from app.utils.security import (
+    verify_password, get_password_hash, create_access_token, decode_access_token,
+    create_password_reset_token, verify_password_reset_token
+)
 from app.config import settings
 from app.services.rate_limiter import RateLimiter, get_rate_limiter, rate_limit_signup_dependency
 from app.utils.dependencies import (
@@ -194,3 +200,79 @@ def get_current_user_profile(user: User = Depends(get_current_user)):
         created_at=user.created_at,
         updated_at=user.updated_at
     )
+
+@router.post("/forgot-password")
+def forgot_password(
+    req: ForgotPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Initiates password recovery for an account.
+    Returns identical success message whether the user exists or not,
+    preventing user enumeration attacks.
+    """
+    user = db.query(User).filter(User.email.ilike(req.email.strip())).first()
+    reset_token = None
+    if user and user.is_active:
+        reset_token = create_password_reset_token(user.email, password_hash=user.hashed_password)
+        from app.models.workflow import AuditLog
+        audit = AuditLog(
+            incident_id="AUTH-SECURITY",
+            who=f"{user.full_name} ({user.role.title()})",
+            what=f"Password recovery requested for {user.email}",
+            when=datetime.datetime.utcnow(),
+            result="Recovery Dispatched"
+        )
+        db.add(audit)
+        db.commit()
+
+    response_data = {
+        "status": "success",
+        "message": "If this email is registered in our municipal directory, password reset instructions have been dispatched."
+    }
+    env = getattr(settings, "ENVIRONMENT", "").strip().lower()
+    if env in ("development", "dev", "test", "testing", "local") and reset_token:
+        response_data["reset_token"] = reset_token
+
+    return response_data
+
+@router.post("/reset-password")
+def reset_password(
+    req: ResetPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Completes password reset using a cryptographically signed recovery token.
+    Enforces single-use token binding (token reuse rejected once password changes).
+    """
+    user = db.query(User).filter(User.email.ilike(req.email.strip())).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Account not found."
+        )
+
+    if not verify_password_reset_token(req.token, req.email, current_password_hash=user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired password reset token."
+        )
+
+    user.hashed_password = get_password_hash(req.new_password)
+    user.updated_at = datetime.datetime.utcnow()
+
+    from app.models.workflow import AuditLog
+    audit = AuditLog(
+        incident_id="AUTH-SECURITY",
+        who=f"{user.full_name} ({user.role.title()})",
+        what=f"Password successfully reset for {user.email}",
+        when=datetime.datetime.utcnow(),
+        result="Success"
+    )
+    db.add(audit)
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": "Password successfully updated. You may now log in with your new credentials."
+    }

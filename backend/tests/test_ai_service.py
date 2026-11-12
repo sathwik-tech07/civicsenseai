@@ -69,6 +69,91 @@ class TestAIService(unittest.TestCase):
         self.assertIn("connected", status)
         self.assertIn("model_installed", status)
 
+    def test_05_gemini_client_v1beta_initialization(self):
+        """Verify get_gemini_client configures api_version='v1beta' in http_options."""
+        from unittest.mock import patch
+        from app.services.ai_service import get_gemini_client
+        with patch("app.services.ai_service.genai.Client") as mock_client_cls:
+            mock_client_cls.return_value = "mock_client"
+            client, key = get_gemini_client("test_secret_key_12345")
+            self.assertEqual(client, "mock_client")
+            self.assertEqual(key, "test_secret_key_12345")
+            mock_client_cls.assert_called_once()
+            _, kwargs = mock_client_cls.call_args
+            self.assertEqual(kwargs.get("api_key"), "test_secret_key_12345")
+            self.assertEqual(kwargs.get("http_options"), {"api_version": "v1beta"})
+
+    def test_06_gemini_json_response_generation(self):
+        """Verify generate_chat_response handles structured JSON output under Gemini."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        mock_response = MagicMock()
+        mock_response.text = '{"reply": "Central command reports 14 active pothole alerts.", "suggested_actions": ["Review Ward 3", "Dispatch Crew"], "data_summary": {"potholes": 14}}'
+        
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = mock_response
+
+        with patch.object(settings, "LLM_PROVIDER", "gemini"), \
+             patch.object(AIService, "_get_gemini_client", return_value=(mock_client, "fake_key")):
+            result = asyncio.run(AIService.generate_chat_response("Status check", system_type="command_os"))
+            self.assertEqual(result["provider"], "gemini")
+            self.assertEqual(result["model"], settings.GEMINI_MODEL)
+            self.assertEqual(result["text"], "Central command reports 14 active pothole alerts.")
+            self.assertEqual(len(result["actions"]), 2)
+            self.assertEqual(result["dataSummary"], {"potholes": 14})
+            
+            # Verify generate_content called with JSON response mime type
+            _, call_kwargs = mock_client.models.generate_content.call_args
+            self.assertEqual(call_kwargs.get("model"), settings.GEMINI_MODEL)
+            config = call_kwargs.get("config")
+            self.assertEqual(config.response_mime_type, "application/json")
+
+    def test_07_gemini_multimodal_vision_request_config(self):
+        """Verify analyze_image_vision configures multimodal contents with Part.from_bytes and JSON schema."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        # Valid 1x1 PNG
+        png_bytes = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82'
+        
+        mock_response = MagicMock()
+        mock_response.text = '{"category": "Pothole", "severity": "High", "confidence": 0.94, "description": "Severe pothole in pavement", "recommended_department": "Roads & Infrastructure", "estimated_repair_time": "24 hours", "estimated_repair_cost": 4500.0, "urgency": "Immediate", "safety_hazards": ["Vehicle damage"], "recommended_action": "Asphalt patch", "infrastructure_component": "Road surface"}'
+        
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = mock_response
+
+        with patch.object(settings, "VISION_PROVIDER", "gemini"), \
+             patch.object(AIService, "_get_gemini_client", return_value=(mock_client, "fake_key")):
+            result = asyncio.run(AIService.analyze_image_vision(png_bytes, "road_defect.png"))
+            self.assertEqual(result["category"], "Pothole")
+            self.assertEqual(result["severity"], "High")
+            self.assertGreaterEqual(result["confidence"], 0.9)
+            
+            # Verify multimodal call configuration
+            _, call_kwargs = mock_client.models.generate_content.call_args
+            contents = call_kwargs.get("contents")
+            self.assertEqual(len(contents), 2)
+            self.assertIn("Municipal Infrastructure Inspection", contents[0])
+            config = call_kwargs.get("config")
+            self.assertEqual(config.response_mime_type, "application/json")
+
+    def test_08_gemini_api_error_handling_and_redaction(self):
+        """Verify API exceptions mask sensitive keys and raise RuntimeError without fabricating results."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        secret_key = "AIzaSySecretApiKey999888"
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = Exception(f"Quota exceeded for key {secret_key}")
+
+        with patch.object(settings, "LLM_PROVIDER", "gemini"), \
+             patch.object(settings, "GEMINI_API_KEY", secret_key), \
+             patch.object(AIService, "_get_gemini_client", return_value=(mock_client, secret_key)):
+            with self.assertRaises(RuntimeError) as ctx:
+                asyncio.run(AIService.generate_chat_response("Hello"))
+            err_msg = str(ctx.exception)
+            self.assertIn("Gemini LLM generation failed", err_msg)
+            self.assertNotIn(secret_key, err_msg)
+            self.assertIn("[REDACTED_GEMINI_KEY]", err_msg)
+
 
 if __name__ == "__main__":
     unittest.main()

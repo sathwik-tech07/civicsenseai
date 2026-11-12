@@ -8,6 +8,7 @@ import { AIAnalysisModal, type AIAnalysisResult } from './AIAnalysisModal';
 import { VoiceReporterModal, type ExtractedVoiceData } from './VoiceReporterModal';
 import { SmartLocationPicker } from './SmartLocationPicker';
 import { DEFAULT_LOCATION } from '../services/locationService';
+import { apiUploadIncidentImage } from '../services/apiClient';
 
 interface Props {
   onAddNewIncident: (inc: Incident) => void;
@@ -108,7 +109,20 @@ export const MobileReporter: React.FC<Props> = ({ onAddNewIncident, onIncidentCr
     setShowAnalysisModal(false);
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    let finalPhotoUrl = previewUrl ?? 'https://images.unsplash.com/photo-1515162816999-a0c47dc192f7?auto=format&fit=crop&w=800&q=80';
+
+    if (selectedFile) {
+      try {
+        const uploadRes = await apiUploadIncidentImage(selectedFile);
+        if (uploadRes && uploadRes.file_url) {
+          finalPhotoUrl = uploadRes.file_url;
+        }
+      } catch (uploadErr) {
+        console.warn('Storage upload note:', uploadErr);
+      }
+    }
+
     const severity = (aiResult?.severity?.toLowerCase() || 'high') as 'low' | 'medium' | 'high' | 'critical';
     const categoryName = selectedCategory || aiResult?.type || 'Pothole';
     const typeKey = categoryName.toLowerCase().replace(/ /g, '_');
@@ -134,7 +148,7 @@ export const MobileReporter: React.FC<Props> = ({ onAddNewIncident, onIncidentCr
       priorityScore,
       estimatedRepairCost: aiResult?.estimatedCost || Math.round(500 + Math.random() * 14000),
       savedEarlyIntervention: Math.round(2000 + Math.random() * 80000),
-      photoUrl: previewUrl ?? 'https://images.unsplash.com/photo-1515162816999-a0c47dc192f7?auto=format&fit=crop&w=800&q=80',
+      photoUrl: finalPhotoUrl,
       voiceNoteText: description || undefined,
       xai: {
         cvConfidence: aiResult?.confidence || 98.0,

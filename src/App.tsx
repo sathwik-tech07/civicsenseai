@@ -5,6 +5,7 @@ import { AuthProvider, useAuth, type UserRole } from './context/AuthContext';
 import { LoginPage } from './components/LoginPage';
 import { Navbar } from './components/Navbar';
 import ExecutiveDashboard from './components/ExecutiveDashboard';
+import { FieldEngineerPortal } from './components/FieldEngineerPortal';
 import { CityDigitalTwin3D } from './components/CityDigitalTwin3D';
 import { DigitalTwinGISMap } from './components/DigitalTwinGISMap';
 import { PredictiveMaintenancePanel } from './components/PredictiveMaintenancePanel';
@@ -186,10 +187,8 @@ function MainApp() {
   };
 
   const handleRoleLogin = (role: UserRole) => {
-    if (role === 'commissioner') setActiveTab('dashboard');
-    else if (role === 'engineer') setActiveTab('mobile');
-    else if (role === 'citizen') setActiveTab('mobile');
-    else if (role === 'admin') setActiveTab('analytics');
+    if (role === 'citizen') setActiveTab('mobile');
+    else setActiveTab('dashboard');
   };
 
   if (isLoading) {
@@ -325,14 +324,25 @@ function MainApp() {
             )}
 
             {activeTab === 'dashboard' && (
-              <ExecutiveDashboard
-                wards={wards}
-                incidents={incidents}
-                departments={departments}
-                onSelectIncident={(inc: Incident) => setSelectedIncidentId(inc.id)}
-                onOpenReportGenerator={() => setActiveTab('reports')}
-                onTriggerEmergency={() => setShowEmergencyBanner(true)}
-              />
+              user?.role === 'engineer' ? (
+                <FieldEngineerPortal
+                  incidents={incidents}
+                  onSelectIncident={(inc: Incident) => setSelectedIncidentId(inc.id)}
+                  onOpenGIS={(inc?: Incident) => {
+                    if (inc) setSelectedIncidentId(inc.id);
+                    setActiveTab('gis');
+                  }}
+                />
+              ) : (
+                <ExecutiveDashboard
+                  wards={wards}
+                  incidents={incidents}
+                  departments={departments}
+                  onSelectIncident={(inc: Incident) => setSelectedIncidentId(inc.id)}
+                  onOpenReportGenerator={() => setActiveTab('reports')}
+                  onTriggerEmergency={() => setShowEmergencyBanner(true)}
+                />
+              )
             )}
 
             {activeTab === '3d-twin' && (

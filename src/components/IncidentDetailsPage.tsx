@@ -15,6 +15,7 @@ import {
 import { downloadIncidentPDFReport } from '../services/pdfReportGenerator';
 import { AISimulationTimelineModal } from './AISimulationTimelineModal';
 import { IncidentSkeleton } from './IncidentSkeleton';
+import { useAuth } from '../context/AuthContext';
 
 interface IncidentDetailsPageProps {
   incidentId: string;
@@ -88,8 +89,9 @@ export const IncidentDetailsPage: React.FC<IncidentDetailsPageProps> = ({
   const [isCopilotOpen, setIsCopilotOpen] = useState(false);
   const [isSimulationOpen, setIsSimulationOpen] = useState(false);
 
-  // ── Role Selector State ──
-  const [activeRole, setActiveRole] = useState<'citizen' | 'engineer' | 'commissioner' | 'admin'>('commissioner');
+  // ── Authenticated User & Role ──
+  const { user } = useAuth();
+  const userRole = user?.role || 'citizen';
   const [transitionNotes, setTransitionNotes] = useState('');
   const [completionPhotoUrl, _setCompletionPhotoUrl] = useState('');
 
@@ -138,7 +140,8 @@ export const IncidentDetailsPage: React.FC<IncidentDetailsPageProps> = ({
   };
 
   const handleStatusUpdate = (status: IncidentStatus) => {
-    transitionStageMutation.mutate({ targetStage: status, actor: activeRole, notes: transitionNotes });
+    const actorName = user ? `${user.fullName} (${user.role.toUpperCase()})` : 'Authenticated User';
+    transitionStageMutation.mutate({ targetStage: status, actor: actorName, notes: transitionNotes });
   };
 
   const handleDispatch = () => {
@@ -1064,33 +1067,29 @@ export const IncidentDetailsPage: React.FC<IncidentDetailsPageProps> = ({
             padding: 20,
           }}>
             {/* Role Selector Header Bar */}
+            {/* Role Header Bar (Derived from authenticated session) */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#00D4FF', fontSize: 15, fontWeight: 700 }}>
                 <Users size={18} />
                 Role-Based Workflow Operations
               </div>
 
-              {/* Role Switcher Pills */}
-              <div style={{ display: 'flex', gap: 4, background: 'rgba(0,0,0,0.4)', padding: 4, borderRadius: 12 }}>
-                {(['citizen', 'engineer', 'commissioner', 'admin'] as const).map((r) => (
-                  <button
-                    key={r}
-                    onClick={() => setActiveRole(r)}
-                    style={{
-                      padding: '4px 10px',
-                      borderRadius: 8,
-                      background: activeRole === r ? '#00D4FF' : 'transparent',
-                      color: activeRole === r ? '#000' : '#94A3B8',
-                      border: 'none',
-                      fontSize: 11,
-                      fontWeight: 700,
-                      textTransform: 'capitalize',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {r}
-                  </button>
-                ))}
+              {/* Authenticated Role Badge */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 11, color: '#94A3B8' }}>Active Session:</span>
+                <span style={{
+                  padding: '4px 10px',
+                  borderRadius: 8,
+                  background: 'rgba(0, 212, 255, 0.15)',
+                  border: '1px solid rgba(0, 212, 255, 0.3)',
+                  color: '#00D4FF',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em'
+                }}>
+                  {userRole}
+                </span>
               </div>
             </div>
 
@@ -1102,8 +1101,8 @@ export const IncidentDetailsPage: React.FC<IncidentDetailsPageProps> = ({
               </span>
             </div>
 
-            {/* Role Action Panels */}
-            {activeRole === 'citizen' && (
+            {/* Role Action Panels (Derived strictly from user's authenticated role) */}
+            {userRole === 'citizen' && (
               <div style={{ fontSize: 12, color: '#94A3B8' }}>
                 <div style={{ marginBottom: 10, color: '#F8FAFC' }}>
                   📱 <strong>Citizen Tracking Portal:</strong> Your reported incident is currently in stage <strong style={{ color: '#00D4FF' }}>{incident.status.replace(/_/g, ' ').toUpperCase()}</strong>.
@@ -1119,25 +1118,25 @@ export const IncidentDetailsPage: React.FC<IncidentDetailsPageProps> = ({
               </div>
             )}
 
-            {activeRole === 'engineer' && (
+            {userRole === 'engineer' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ fontSize: 11, color: '#94A3B8' }}>👨‍🔧 <strong>Field Engineer Actions:</strong></div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                   <button
-                    onClick={() => transitionStageMutation.mutate({ targetStage: 'en_route', actor: 'Eng. Rajesh V (Lead Engineer)', notes: 'Crew en route to site' })}
+                    onClick={() => transitionStageMutation.mutate({ targetStage: 'en_route', actor: user?.fullName || 'Field Engineer', notes: 'Crew en route to site' })}
                     style={{ padding: '10px', borderRadius: 10, background: 'rgba(56,189,248,0.2)', border: '1px solid #38BDF8', color: '#38BDF8', fontWeight: 700, fontSize: 11, cursor: 'pointer' }}
                   >
                     🚚 Go En Route
                   </button>
                   <button
-                    onClick={() => transitionStageMutation.mutate({ targetStage: 'repair_started', actor: 'Eng. Rajesh V (Lead Engineer)', notes: 'Asphalt cold patch & structural work started' })}
+                    onClick={() => transitionStageMutation.mutate({ targetStage: 'repair_started', actor: user?.fullName || 'Field Engineer', notes: 'Asphalt cold patch & structural work started' })}
                     style={{ padding: '10px', borderRadius: 10, background: 'rgba(234,179,8,0.2)', border: '1px solid #EAB308', color: '#EAB308', fontWeight: 700, fontSize: 11, cursor: 'pointer' }}
                   >
                     🔧 Start Repair Work
                   </button>
                 </div>
                 <button
-                  onClick={() => transitionStageMutation.mutate({ targetStage: 'quality_inspection', actor: 'Eng. Rajesh V (Lead Engineer)', notes: 'Repair complete. Submitted for QA Inspection', resolvedPhotoUrl: completionPhotoUrl || incident.photoUrl })}
+                  onClick={() => transitionStageMutation.mutate({ targetStage: 'quality_inspection', actor: user?.fullName || 'Field Engineer', notes: 'Repair complete. Submitted for QA Inspection', resolvedPhotoUrl: completionPhotoUrl || incident.photoUrl })}
                   style={{ width: '100%', padding: '10px', borderRadius: 10, background: 'linear-gradient(135deg, #10B981, #059669)', color: '#fff', border: 'none', fontWeight: 800, fontSize: 12, cursor: 'pointer' }}
                 >
                   🔬 Complete Repair & Submit Quality Inspection
@@ -1145,25 +1144,25 @@ export const IncidentDetailsPage: React.FC<IncidentDetailsPageProps> = ({
               </div>
             )}
 
-            {activeRole === 'commissioner' && (
+            {userRole === 'commissioner' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ fontSize: 11, color: '#94A3B8' }}>🏛️ <strong>Commissioner Executive Controls:</strong></div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                   <button
-                    onClick={() => transitionStageMutation.mutate({ targetStage: 'crew_assigned', actor: 'Dr. Anita Roy (City Commissioner)', notes: 'Approved emergency deployment for Rapid Crew Alpha-3' })}
+                    onClick={() => transitionStageMutation.mutate({ targetStage: 'crew_assigned', actor: user?.fullName || 'City Commissioner', notes: 'Approved emergency deployment for Rapid Crew' })}
                     style={{ padding: '10px', borderRadius: 10, background: 'linear-gradient(135deg, #00D4FF, #0EA5E9)', color: '#000', border: 'none', fontWeight: 800, fontSize: 11, cursor: 'pointer' }}
                   >
                     🚒 Approve & Dispatch Crew
                   </button>
                   <button
-                    onClick={() => transitionStageMutation.mutate({ targetStage: 'commissioner_review', actor: 'Dr. Anita Roy (City Commissioner)', notes: 'Escalated to Executive War Room' })}
+                    onClick={() => transitionStageMutation.mutate({ targetStage: 'commissioner_review', actor: user?.fullName || 'City Commissioner', notes: 'Escalated to Executive War Room' })}
                     style={{ padding: '10px', borderRadius: 10, background: 'rgba(249,115,22,0.2)', border: '1px solid #F97316', color: '#F97316', fontWeight: 700, fontSize: 11, cursor: 'pointer' }}
                   >
                     🚨 Escalate Priority
                   </button>
                 </div>
                 <button
-                  onClick={() => transitionStageMutation.mutate({ targetStage: 'citizen_notified', actor: 'Dr. Anita Roy (City Commissioner)', notes: 'Verified resolution & closed incident dossier' })}
+                  onClick={() => transitionStageMutation.mutate({ targetStage: 'citizen_notified', actor: user?.fullName || 'City Commissioner', notes: 'Verified resolution & closed incident dossier' })}
                   style={{ width: '100%', padding: '10px', borderRadius: 10, background: 'rgba(16,185,129,0.2)', border: '1px solid #10B981', color: '#10B981', fontWeight: 800, fontSize: 12, cursor: 'pointer' }}
                 >
                   ✅ Close Incident & Notify Citizen
@@ -1171,7 +1170,7 @@ export const IncidentDetailsPage: React.FC<IncidentDetailsPageProps> = ({
               </div>
             )}
 
-            {activeRole === 'admin' && (
+            {userRole === 'admin' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ fontSize: 11, color: '#94A3B8' }}>⚡ <strong>System Admin Override:</strong></div>
                 <div style={{ display: 'flex', gap: 6 }}>
@@ -1186,7 +1185,7 @@ export const IncidentDetailsPage: React.FC<IncidentDetailsPageProps> = ({
                   <button
                     onClick={() => {
                       const sel = (document.getElementById('adminStageSelect') as HTMLSelectElement).value;
-                      transitionStageMutation.mutate({ targetStage: sel, actor: 'System Administrator (Root)', notes: 'Manual admin stage override' });
+                      transitionStageMutation.mutate({ targetStage: sel, actor: user?.fullName || 'System Administrator', notes: 'Manual admin stage override' });
                     }}
                     style={{ padding: '6px 14px', borderRadius: 8, background: '#00D4FF', color: '#000', border: 'none', fontWeight: 800, fontSize: 11, cursor: 'pointer' }}
                   >
