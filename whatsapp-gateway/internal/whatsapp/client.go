@@ -64,7 +64,11 @@ func (cm *ClientManager) Initialize() error {
 	// Register event listener
 	cm.client.AddEventHandler(cm.handleEvent)
 
-	logging.Infof("Whatsmeow client initialized. Device ID: %s", cm.deviceStore.ID.String())
+	if cm.deviceStore != nil && cm.deviceStore.ID != nil {
+		logging.Infof("Whatsmeow client initialized. Device ID: %s", cm.deviceStore.ID.String())
+	} else {
+		logging.Infof("Whatsmeow client initialized. Device is unpaired (ready for QR pairing).")
+	}
 	return nil
 }
 

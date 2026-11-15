@@ -65,7 +65,15 @@ func Load() *Config {
 	}
 
 	fastAPIURL := os.Getenv("FASTAPI_BACKEND_URL")
-	if fastAPIURL == "" {
+	if isRemoteCloud {
+		if fastAPIURL == "" || fastAPIURL == "http://backend:8000" || fastAPIURL == "http://localhost:8000" || fastAPIURL == "http://127.0.0.1:8000" {
+			targetEnv := "staging"
+			if isProduction {
+				targetEnv = "production"
+			}
+			panic(fmt.Sprintf("CRITICAL CONFIGURATION ERROR: FASTAPI_BACKEND_URL must be configured to the valid remote backend URL (e.g. https://civicsense-backend-staging.onrender.com) in %s environment. Local host %q is forbidden.", targetEnv, fastAPIURL))
+		}
+	} else if fastAPIURL == "" {
 		fastAPIURL = "http://localhost:8000"
 	}
 
@@ -124,11 +132,25 @@ func Load() *Config {
 		}
 		validatedDBURL = normalizedURL
 		dbDialect = detectedDialect
+	} else if isRemoteCloud {
+		targetEnv := "staging"
+		if isProduction {
+			targetEnv = "production"
+		}
+		panic(fmt.Sprintf("CRITICAL DATABASE CONFIGURATION ERROR: %s environment requires PostgreSQL persistence. Dedicated WHATSAPP_GATEWAY_DATABASE_URL must be configured. Silent fallback to SQLite is strictly forbidden.", strings.Title(targetEnv)))
 	} else if dbDialect == "postgres" || dbDialect == "postgresql" {
 		panic("CRITICAL DATABASE CONFIGURATION ERROR: DB_DIALECT is set to postgres but WHATSAPP_GATEWAY_DATABASE_URL is empty.")
 	} else {
-		// Safe local fallback to SQLite
+		// Safe local fallback to SQLite only permitted in non-cloud/development environments
 		dbDialect = "sqlite"
+	}
+
+	if isRemoteCloud && (dbDialect == "sqlite" || strings.HasPrefix(rawDBURL, "sqlite:")) {
+		targetEnv := "staging"
+		if isProduction {
+			targetEnv = "production"
+		}
+		panic(fmt.Sprintf("CRITICAL DATABASE CONFIGURATION ERROR: SQLite is strictly forbidden in %s environment due to ephemeral cloud container disks. PostgreSQL persistence with WHATSAPP_GATEWAY_DATABASE_URL is required.", targetEnv))
 	}
 
 	return &Config{

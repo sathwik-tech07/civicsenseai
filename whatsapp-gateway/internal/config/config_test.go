@@ -100,6 +100,7 @@ func TestConfigGatewayDatabaseURLPrecedence(t *testing.T) {
 
 func TestConfigRejectsSilentPrivilegedFallbackInProduction(t *testing.T) {
 	os.Setenv("ENVIRONMENT", "staging")
+	os.Setenv("FASTAPI_BACKEND_URL", "https://civicsense-backend-staging.onrender.com")
 	os.Setenv("WHATSAPP_GATEWAY_SECRET", "cryptographically-secure-test-secret-12345")
 	os.Setenv("DATABASE_URL", "postgresql://postgres.oayzaszhhpfjlpmaezmc:BackendSecret@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres")
 	os.Unsetenv("WHATSAPP_GATEWAY_DATABASE_URL")
@@ -107,6 +108,7 @@ func TestConfigRejectsSilentPrivilegedFallbackInProduction(t *testing.T) {
 
 	defer func() {
 		os.Unsetenv("ENVIRONMENT")
+		os.Unsetenv("FASTAPI_BACKEND_URL")
 		os.Unsetenv("WHATSAPP_GATEWAY_SECRET")
 		os.Unsetenv("DATABASE_URL")
 	}()
@@ -142,6 +144,7 @@ func TestConfigFailClosedAcrossEnvironments(t *testing.T) {
 			} else {
 				os.Unsetenv("ENVIRONMENT")
 			}
+			os.Setenv("FASTAPI_BACKEND_URL", "https://civicsense-backend-staging.onrender.com")
 			os.Setenv("WHATSAPP_GATEWAY_SECRET", "cryptographically-secure-test-secret-12345")
 			os.Setenv("DATABASE_URL", "postgresql://postgres.oayzaszhhpfjlpmaezmc:BackendSecret@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres")
 			os.Unsetenv("WHATSAPP_GATEWAY_DATABASE_URL")
@@ -149,6 +152,7 @@ func TestConfigFailClosedAcrossEnvironments(t *testing.T) {
 
 			defer func() {
 				os.Unsetenv("ENVIRONMENT")
+				os.Unsetenv("FASTAPI_BACKEND_URL")
 				os.Unsetenv("WHATSAPP_GATEWAY_SECRET")
 				os.Unsetenv("DATABASE_URL")
 			}()
@@ -178,6 +182,74 @@ func TestConfigFailClosedAcrossEnvironments(t *testing.T) {
 				}
 			}
 		}()
+	}
+}
+
+func TestConfigRejectsInvalidFastAPIURLInCloud(t *testing.T) {
+	invalidURLs := []string{"", "http://backend:8000", "http://localhost:8000", "http://127.0.0.1:8000"}
+
+	for _, invalidURL := range invalidURLs {
+		func() {
+			os.Setenv("ENVIRONMENT", "staging")
+			if invalidURL != "" {
+				os.Setenv("FASTAPI_BACKEND_URL", invalidURL)
+			} else {
+				os.Unsetenv("FASTAPI_BACKEND_URL")
+			}
+			os.Setenv("WHATSAPP_GATEWAY_SECRET", "cryptographically-secure-test-secret-12345")
+			os.Setenv("WHATSAPP_GATEWAY_DATABASE_URL", "postgresql://whatsmeow_gateway.oayzaszhhpfjlpmaezmc:GatewaySecret@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres")
+
+			defer func() {
+				os.Unsetenv("ENVIRONMENT")
+				os.Unsetenv("FASTAPI_BACKEND_URL")
+				os.Unsetenv("WHATSAPP_GATEWAY_SECRET")
+				os.Unsetenv("WHATSAPP_GATEWAY_DATABASE_URL")
+			}()
+
+			didPanic := false
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						didPanic = true
+					}
+				}()
+				Load()
+			}()
+
+			if !didPanic {
+				t.Errorf("FASTAPI_BACKEND_URL=%q: expected panic in staging environment, got none", invalidURL)
+			}
+		}()
+	}
+}
+
+func TestConfigRejectsSQLiteInCloud(t *testing.T) {
+	os.Setenv("ENVIRONMENT", "staging")
+	os.Setenv("FASTAPI_BACKEND_URL", "https://civicsense-backend-staging.onrender.com")
+	os.Setenv("WHATSAPP_GATEWAY_SECRET", "cryptographically-secure-test-secret-12345")
+	os.Setenv("DB_DIALECT", "sqlite")
+	os.Setenv("WHATSAPP_GATEWAY_DATABASE_URL", "sqlite:/data/test.db")
+
+	defer func() {
+		os.Unsetenv("ENVIRONMENT")
+		os.Unsetenv("FASTAPI_BACKEND_URL")
+		os.Unsetenv("WHATSAPP_GATEWAY_SECRET")
+		os.Unsetenv("DB_DIALECT")
+		os.Unsetenv("WHATSAPP_GATEWAY_DATABASE_URL")
+	}()
+
+	didPanic := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				didPanic = true
+			}
+		}()
+		Load()
+	}()
+
+	if !didPanic {
+		t.Errorf("expected panic rejecting SQLite in staging environment, got none")
 	}
 }
 

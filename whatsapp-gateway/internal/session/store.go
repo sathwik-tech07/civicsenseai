@@ -26,6 +26,10 @@ type StoreManager struct {
 
 // NewStoreManager initializes storage for whatsmeow credentials (PostgreSQL or SQLite).
 func NewStoreManager(cfg *config.Config) (*StoreManager, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("session store configuration cannot be nil")
+	}
+
 	waLogger := waLog.Stdout("SessionStore", "INFO", true)
 
 	var container *sqlstore.Container
@@ -33,6 +37,9 @@ func NewStoreManager(cfg *config.Config) (*StoreManager, error) {
 	var dbInfo string
 
 	if cfg.DBDialect == "postgres" {
+		if cfg.DatabaseURL == "" {
+			return nil, fmt.Errorf("postgresql database url cannot be empty when dialect is postgres")
+		}
 		maskedDSN := config.MaskDatabaseURL(cfg.DatabaseURL)
 		dbInfo = maskedDSN
 		logging.Infof("Initializing whatsmeow PostgreSQL session container with schema '%s' at: %s", cfg.DBSchema, maskedDSN)
@@ -49,6 +56,9 @@ func NewStoreManager(cfg *config.Config) (*StoreManager, error) {
 		}
 	} else {
 		// SQLite Mode
+		if cfg.DBPath == "" {
+			return nil, fmt.Errorf("sqlite database path cannot be empty when dialect is sqlite")
+		}
 		dbInfo = cfg.DBPath
 		dir := filepath.Dir(cfg.DBPath)
 		if dir != "" && dir != "." {
@@ -66,6 +76,10 @@ func NewStoreManager(cfg *config.Config) (*StoreManager, error) {
 		}
 	}
 
+	if container == nil {
+		return nil, fmt.Errorf("whatsmeow session container is nil after initialization")
+	}
+
 	// Retrieve first device or create a new one
 	deviceStore, err := container.GetFirstDevice()
 	if err != nil {
@@ -74,6 +88,11 @@ func NewStoreManager(cfg *config.Config) (*StoreManager, error) {
 	if deviceStore == nil {
 		logging.Infof("No existing device session found. Creating fresh device for pairing...")
 		deviceStore = container.NewDevice()
+		if deviceStore == nil {
+			return nil, fmt.Errorf("failed to create fresh device session: container returned nil")
+		}
+	} else if deviceStore.ID == nil {
+		logging.Infof("Existing device session loaded (unregistered/unpaired). Ready for QR pairing...")
 	} else {
 		logging.Infof("Existing device session loaded: JID=%s", deviceStore.ID.String())
 	}
