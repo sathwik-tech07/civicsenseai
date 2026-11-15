@@ -1,8 +1,11 @@
 package session
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/lib/pq"
 
 	"civicsense/whatsapp-gateway/internal/config"
 )
@@ -69,5 +72,69 @@ func TestVerifyPostgresSchemaExistsRejectsInvalidURL(t *testing.T) {
 	err := verifyPostgresSchemaExists("invalid-postgres-url", "whatsmeow")
 	if err == nil {
 		t.Fatal("expected connection error on invalid postgres URL, got nil")
+	}
+}
+
+// TestClassifyPostgresError verifies that database connection failures are properly categorized.
+func TestClassifyPostgresError(t *testing.T) {
+	testCases := []struct {
+		name             string
+		err              error
+		expectedCategory FailureCategory
+	}{
+		{
+			name:             "Authentication failure via pq.Error 28P01",
+			err:              &pq.Error{Code: "28P01", Message: "password authentication failed for user whatsmeow_gateway"},
+			expectedCategory: FailureAuthentication,
+		},
+		{
+			name:             "Authentication failure via error string",
+			err:              errors.New("pq: password authentication failed for user \"whatsmeow_gateway\""),
+			expectedCategory: FailureAuthentication,
+		},
+		{
+			name:             "DNS network error",
+			err:              errors.New("dial tcp: lookup aws-0-ap-northeast-1.pooler.supabase.com: no such host"),
+			expectedCategory: FailureDNSNetwork,
+		},
+		{
+			name:             "Network timeout",
+			err:              errors.New("dial tcp 54.64.190.72:5432: i/o timeout"),
+			expectedCategory: FailureDNSNetwork,
+		},
+		{
+			name:             "Database permission failure (invalid catalog)",
+			err:              &pq.Error{Code: "3D000", Message: "database \"postgres\" does not exist"},
+			expectedCategory: FailureDatabasePermission,
+		},
+		{
+			name:             "Schema permission failure",
+			err:              &pq.Error{Code: "42501", Message: "permission denied for schema whatsmeow"},
+			expectedCategory: FailureSchemaPermission,
+		},
+		{
+			name:             "Schema missing",
+			err:              &pq.Error{Code: "3F000", Message: "schema \"whatsmeow\" does not exist"},
+			expectedCategory: FailureSchemaMissing,
+		},
+		{
+			name:             "URL parsing error",
+			err:              errors.New("invalid connection option \"search_path\""),
+			expectedCategory: FailureURLParsing,
+		},
+		{
+			name:             "Nil error returns empty",
+			err:              nil,
+			expectedCategory: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			category := ClassifyPostgresError(tc.err)
+			if category != tc.expectedCategory {
+				t.Errorf("expected category %s, got %s for error: %v", tc.expectedCategory, category, tc.err)
+			}
+		})
 	}
 }

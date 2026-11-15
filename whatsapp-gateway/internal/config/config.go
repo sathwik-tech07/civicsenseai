@@ -96,9 +96,13 @@ func Load() *Config {
 	backendDBURL := os.Getenv("DATABASE_URL")
 
 	var rawDBURL string
+	var sourceVar string
+
 	if gatewayDBURL != "" {
+		sourceVar = "WHATSAPP_GATEWAY_DATABASE_URL"
 		rawDBURL = gatewayDBURL
 	} else if backendDBURL != "" {
+		sourceVar = "DATABASE_URL"
 		// Strict Security Enforcement: Never silently fall back to backend's privileged DATABASE_URL
 		// in staging or production environments when using PostgreSQL mode.
 		isPostgresMode := dbDialect == "postgres" || dbDialect == "postgresql" || strings.HasPrefix(backendDBURL, "postgres://") || strings.HasPrefix(backendDBURL, "postgresql://")
@@ -113,6 +117,8 @@ func Load() *Config {
 			}
 		}
 		rawDBURL = backendDBURL
+	} else {
+		sourceVar = "NONE"
 	}
 	dbPath := os.Getenv("SESSION_DB_PATH")
 	if dbPath == "" {
@@ -126,7 +132,10 @@ func Load() *Config {
 
 	var validatedDBURL string
 	if rawDBURL != "" {
-		normalizedURL, detectedDialect, err := ValidateAndNormalizeDatabaseURL(rawDBURL, isRemoteCloud, schema)
+		diag, cleanURL := InspectDatabaseConfig(rawDBURL, sourceVar)
+		LogSafeDiagnostics(diag)
+
+		normalizedURL, detectedDialect, err := ValidateAndNormalizeDatabaseURL(cleanURL, isRemoteCloud, schema)
 		if err != nil {
 			panic(fmt.Sprintf("CRITICAL DATABASE CONFIGURATION ERROR: %v", err))
 		}
