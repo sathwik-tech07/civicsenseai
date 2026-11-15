@@ -24,7 +24,10 @@ from pydantic import ValidationError
 from app.config import settings
 from app.database import SessionLocal
 from app.schemas.whatsapp import MetaWebhookPayload, WhatsAppMessage
+from app.models.incident import Incident
 from app.services.whatsapp_service import whatsapp_service
+from app.services.storage_service import get_storage_provider
+from app.utils.image_security import detect_image_format
 
 logger = logging.getLogger("civicsense.whatsapp.router")
 
@@ -43,9 +46,10 @@ WELCOME_MESSAGE = (
     "• `my complaints` — View all your reported complaints\n"
     "• `escalate <Complaint ID> <reason>` — Request commissioner escalation\n"
     "• `rate <Complaint ID> <1-5>` — Submit satisfaction rating\n\n"
-    "👷 *Municipal Staff Services:*\n"
-    "• `engineer login <passcode>` | `tasks` | `accept <ID>` | `start work <ID>` | `resolve <ID>`\n"
-    "• `commissioner login <passcode>` | `summary`\n\n"
+    "👷 *Authorized Municipal Staff:*\n"
+    "• `tasks` | `accept <ID>` | `start work <ID>` | `resolve <ID>`\n"
+    "• `summary` (Executive Operations)\n"
+    "• `staff link <email>` (Secure staff device linking via OTP)\n\n"
     "How can I assist you today?"
 )
 
@@ -224,7 +228,7 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                             if btn_id == "confirm_incident":
                                 await whatsapp_service.execute_confirmation_reply(db, sender_phone)
                             elif btn_id == "cancel_incident":
-                                await whatsapp_service.execute_cancellation_reply(sender_phone)
+                                await whatsapp_service.execute_cancellation_reply(sender_phone, db=db)
                             else:
                                 await whatsapp_service.send_text_message(
                                     sender_phone,
@@ -239,12 +243,25 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                             lower_text = raw_text.lower()
                             user_role = whatsapp_service.get_user_role(db, sender_phone)
 
-                            # A. Staff Authentication: e.g. "engineer login <passcode>" or "staff login <passcode>"
-                            auth_match = re.match(r"^(?:staff|login\s+)?(engineer|commissioner|admin)(?:\s+login)?\s+(\S+)$", lower_text)
+                            # A. Staff Device Authentication & Secure OTP Linking
+                            auth_match = re.match(
+                                r"^(?:staff\s+(?:login|link|verify)|(?:engineer|commissioner|admin)\s+(?:login|link|verify)|link)\s+(\S+)(?:\s+(.+))?$",
+                                raw_text,
+                                re.IGNORECASE
+                            )
+                            verify_match = re.match(
+                                r"^(?:verify|code|staff\s+verify)\s+(\d{6})$",
+                                raw_text,
+                                re.IGNORECASE
+                            )
                             if auth_match:
-                                target_role = auth_match.group(1)
-                                passcode = auth_match.group(2)
-                                success, msg_text = whatsapp_service.authenticate_staff(db, sender_phone, target_role, passcode)
+                                first_arg = auth_match.group(1)
+                                second_arg = auth_match.group(2)
+                                success, msg_text = whatsapp_service.authenticate_staff(db, sender_phone, first_arg, second_arg)
+                                await whatsapp_service.send_text_message(sender_phone, msg_text)
+                            elif verify_match:
+                                code_arg = verify_match.group(1)
+                                success, msg_text = whatsapp_service.otp_manager.verify_otp(db, sender_phone, code_arg)
                                 await whatsapp_service.send_text_message(sender_phone, msg_text)
 
                             # B. Commissioner / Executive Commands
@@ -254,7 +271,7 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                                 else:
                                     await whatsapp_service.send_text_message(
                                         sender_phone,
-                                        "⚠️ Executive summary is restricted to municipal commissioners. Reply *commissioner login <passcode>* to authenticate."
+                                        "⚠️ Access denied. Executive summary is restricted to municipal commissioners. Please contact your system administrator to register your official staff device."
                                     )
 
                             # C. Field Engineer Commands
@@ -264,7 +281,7 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                                 else:
                                     await whatsapp_service.send_text_message(
                                         sender_phone,
-                                        "⚠️ Work order queue is restricted to field engineers. Reply *engineer login <passcode>* to authenticate."
+                                        "⚠️ Access denied. Work order queue is restricted to field engineers. Please contact your system administrator to register your official staff device."
                                     )
 
                             elif re.match(r"^accept\s+([a-zA-Z0-9\-_]+)", lower_text):
@@ -273,7 +290,7 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                                     if user_role not in ("engineer", "admin"):
                                         await whatsapp_service.send_text_message(
                                             sender_phone,
-                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account. Reply 'engineer login <passcode>' to authenticate."
+                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account linked to this device."
                                         )
                                     else:
                                         await whatsapp_service.engineer_accept_assignment(db, sender_phone, match.group(1))
@@ -284,7 +301,7 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                                     if user_role not in ("engineer", "admin"):
                                         await whatsapp_service.send_text_message(
                                             sender_phone,
-                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account. Reply 'engineer login <passcode>' to authenticate."
+                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account linked to this device."
                                         )
                                     else:
                                         await whatsapp_service.engineer_reject_assignment(db, sender_phone, match.group(1), match.group(2) or "Reassignment required")
@@ -295,7 +312,7 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                                     if user_role not in ("engineer", "admin"):
                                         await whatsapp_service.send_text_message(
                                             sender_phone,
-                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account. Reply 'engineer login <passcode>' to authenticate."
+                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account linked to this device."
                                         )
                                     else:
                                         await whatsapp_service.engineer_start_work(db, sender_phone, match.group(1))
@@ -306,7 +323,7 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                                     if user_role not in ("engineer", "admin"):
                                         await whatsapp_service.send_text_message(
                                             sender_phone,
-                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account. Reply 'engineer login <passcode>' to authenticate."
+                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account linked to this device."
                                         )
                                     else:
                                         await whatsapp_service.engineer_update_progress(db, sender_phone, match.group(1), match.group(2))
@@ -317,7 +334,7 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                                     if user_role not in ("engineer", "admin"):
                                         await whatsapp_service.send_text_message(
                                             sender_phone,
-                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account. Reply 'engineer login <passcode>' to authenticate."
+                                            "⚠️ Access denied. Field engineer operations require an authenticated engineer account linked to this device."
                                         )
                                     else:
                                         await whatsapp_service.engineer_resolve_incident(db, sender_phone, match.group(1))
@@ -356,14 +373,14 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
 
                             # I. Cancellation of Pending Draft
                             elif lower_text in ("cancel", "no", "discard", "stop"):
-                                await whatsapp_service.execute_cancellation_reply(sender_phone)
+                                await whatsapp_service.execute_cancellation_reply(sender_phone, db=db)
 
                             # J. Address Update for Pending Draft
-                            elif whatsapp_service.pending_sessions.get_draft(sender_phone) and (
+                            elif whatsapp_service.pending_sessions.get_draft(sender_phone, db=db) and (
                                 lower_text.startswith("address:") or lower_text.startswith("location:") or
                                 lower_text.startswith("near ") or lower_text.startswith("at ") or lower_text.startswith("in ")
                             ):
-                                await whatsapp_service.update_draft_address(sender_phone, raw_text)
+                                await whatsapp_service.update_draft_address(sender_phone, raw_text, db=db)
 
                             # K. Greetings & Help
                             elif lower_text in ("hi", "hello", "hey", "start", "help", "menu", "namaste", "hi!") or lower_text.startswith("hi "):
@@ -375,7 +392,7 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                                 "streetlight", "light pole", "drain", "drainage", "sewer", "sinkhole", "road damage",
                                 "broken road", "water pipe", "flooding", "manhole"
                             )):
-                                await whatsapp_service.handle_conversational_text_draft(sender_phone, raw_text)
+                                await whatsapp_service.handle_conversational_text_draft(sender_phone, raw_text, db=db)
 
                             # M. General Conversational Civic Assistance via Gemini 2.5 Flash
                             else:
@@ -399,17 +416,72 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                             if re.search(r"resolve\s+([a-zA-Z0-9\-_]+)", cap_lower):
                                 match = re.search(r"resolve\s+([a-zA-Z0-9\-_]+)", caption, re.IGNORECASE)
                                 if match:
-                                    safe_fn = f"resolved_{int(time.time())}_{uuid.uuid4().hex[:6]}.jpg"
-                                    upload_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
-                                    os.makedirs(upload_dir, exist_ok=True)
-                                    file_path = os.path.join(upload_dir, safe_fn)
-                                    with open(file_path, "wb") as f:
-                                        f.write(image_bytes)
+                                    target_inc_id = match.group(1).strip().upper()
+
+                                    # Pre-upload validation: Verify incident exists and engineer is authorized & assigned
+                                    inc = db.query(Incident).filter(Incident.id.ilike(target_inc_id)).first()
+                                    if not inc:
+                                        await whatsapp_service.send_text_message(
+                                            sender_phone,
+                                            f"❌ Incident '{target_inc_id}' was not found or is not accessible."
+                                        )
+                                        continue
+
+                                    authorized, user, err_msg = whatsapp_service._verify_engineer_access(
+                                        db, sender_phone, inc, action="resolve"
+                                    )
+                                    if not authorized:
+                                        await whatsapp_service.send_text_message(sender_phone, err_msg)
+                                        continue
+
+                                    # Validate file size limits
+                                    max_bytes = getattr(settings, "MAX_UPLOAD_SIZE_BYTES", 10485760)
+                                    if len(image_bytes) > max_bytes:
+                                        limit_mb = max(1, max_bytes // (1024 * 1024))
+                                        logger.warning("Resolution photo from %s rejected: exceeds max upload size (%d > %d)", sender_phone, len(image_bytes), max_bytes)
+                                        await whatsapp_service.send_text_message(
+                                            sender_phone,
+                                            f"❌ Resolution photo exceeds maximum allowed size ({limit_mb} MB). Incident resolution was aborted."
+                                        )
+                                        continue
+
+                                    # Validate MIME format using magic bytes
+                                    format_info = detect_image_format(image_bytes)
+                                    if not format_info:
+                                        logger.warning("Resolution photo from %s rejected: unsupported format", sender_phone)
+                                        await whatsapp_service.send_text_message(
+                                            sender_phone,
+                                            "❌ Unsupported image format. Please send a genuine JPEG, PNG, or WEBP photo to resolve the incident."
+                                        )
+                                        continue
+
+                                    _, mime_type, safe_ext = format_info
+
+                                    # Persist photo using configured storage provider (Supabase S3 or Local)
+                                    storage_provider = get_storage_provider()
+                                    try:
+                                        stored = await storage_provider.store_image(
+                                            contents=image_bytes,
+                                            safe_ext=safe_ext,
+                                            mime_type=mime_type,
+                                            prefix="uploads"
+                                        )
+                                    except Exception as e:
+                                        logger.error("Storage upload failed for engineer resolution photo on incident %s: %s", target_inc_id, e)
+                                        await whatsapp_service.send_text_message(
+                                            sender_phone,
+                                            f"❌ Could not store resolution photo for `{target_inc_id}` due to a storage error. Incident resolution was aborted."
+                                        )
+                                        continue
+
+                                    stored_key = stored["filename"]
+                                    resolution_photo_url = stored_key if stored_key.startswith("uploads/") else f"/uploads/{stored_key}"
+
                                     await whatsapp_service.engineer_resolve_incident(
-                                        db, sender_phone, match.group(1), photo_url=f"/uploads/{safe_fn}", notes="Resolution photo uploaded."
+                                        db, sender_phone, target_inc_id, photo_url=resolution_photo_url, notes="Resolution photo uploaded."
                                     )
                                 else:
-                                    await whatsapp_service.handle_photo_report(sender_phone=sender_phone, image_bytes=image_bytes, caption=caption)
+                                    await whatsapp_service.handle_photo_report(sender_phone=sender_phone, image_bytes=image_bytes, caption=caption, db=db)
 
                             # If caption contains "evidence <ID>"
                             elif re.search(r"evidence\s+(?:for\s+)?([a-zA-Z0-9\-_]+)", cap_lower):
@@ -417,33 +489,42 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                                 if match:
                                     await whatsapp_service.submit_additional_evidence(db, sender_phone, match.group(1), image_bytes, caption)
                                 else:
-                                    await whatsapp_service.handle_photo_report(sender_phone=sender_phone, image_bytes=image_bytes, caption=caption)
+                                    await whatsapp_service.handle_photo_report(sender_phone=sender_phone, image_bytes=image_bytes, caption=caption, db=db)
 
                             # Default: New Complaint Photo Report
                             else:
                                 await whatsapp_service.handle_photo_report(
                                     sender_phone=sender_phone,
                                     image_bytes=image_bytes,
-                                    caption=caption
+                                    caption=caption,
+                                    db=db
                                 )
 
                         # ------------------------------------------------------
                         # 4. Location Messages
                         # ------------------------------------------------------
                         elif msg.type == "location" and msg.location:
-                            draft = whatsapp_service.pending_sessions.get_draft(sender_phone)
+                            draft = whatsapp_service.pending_sessions.get_draft(sender_phone, db=db)
                             if draft:
                                 loc_addr = msg.location.address or msg.location.name
                                 await whatsapp_service.update_draft_location(
                                     sender_phone,
                                     lat=msg.location.latitude,
                                     lng=msg.location.longitude,
-                                    address=loc_addr
+                                    address=loc_addr,
+                                    db=db
                                 )
                             else:
+                                loc_addr = msg.location.address or msg.location.name or "Pinned Location (Reported via WhatsApp)"
+                                whatsapp_service.pending_sessions.store_draft(sender_phone, {
+                                    "lat": msg.location.latitude,
+                                    "lng": msg.location.longitude,
+                                    "address": loc_addr,
+                                    "status": "awaiting_photo_or_description",
+                                }, db=db)
                                 await whatsapp_service.send_text_message(
                                     sender_phone,
-                                    "📍 Location received! Please send a photograph or description of the civic problem to file a report."
+                                    f"📍 Location received ({loc_addr})! Please send a photograph or description of the civic problem to file your report."
                                 )
 
                         # ------------------------------------------------------

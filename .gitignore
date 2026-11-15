@@ -48,3 +48,5 @@ scratch/
 *.njsproj
 *.sln
 *.sw?
+*.exe
+database_backups/

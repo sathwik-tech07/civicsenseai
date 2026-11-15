@@ -48,6 +48,19 @@ def get_url() -> str:
     return normalize_database_url(raw_url)
 
 
+def include_object(object, name, type_, reflected, compare_to):
+    """
+    Prevent Alembic from inspecting, altering, or dropping WhatsMeow tables or schemas.
+    WhatsMeow manages its own tables under the 'whatsmeow' schema/prefix.
+    """
+    if type_ == "table":
+        if name.startswith("whatsmeow_") or name in ("processed_messages", "inbound_events_queue"):
+            return False
+        if hasattr(object, "schema") and object.schema == "whatsmeow":
+            return False
+    return True
+
+
 def run_migrations_offline() -> None:
     """
     Run migrations in 'offline' mode.
@@ -60,6 +73,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         render_as_batch=url.startswith("sqlite"),
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -89,6 +103,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             render_as_batch=db_url.startswith("sqlite"),
+            include_object=include_object,
         )
 
         with context.begin_transaction():

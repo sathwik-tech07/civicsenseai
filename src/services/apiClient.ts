@@ -933,3 +933,53 @@ export async function apiFetchSystemTelemetry(): Promise<any> {
   if (!res.ok) throw new Error('Failed to fetch system telemetry');
   return await res.json();
 }
+
+/**
+ * 37. GET /api/v1/admin/whatsapp/status
+ */
+export async function apiFetchWhatsAppGatewayStatus(): Promise<{
+  status: string;
+  connected: boolean;
+  logged_in: boolean;
+  jid?: string;
+  uptime_seconds: number;
+  goroutines: number;
+  memory_alloc_mb: number;
+}> {
+  const res = await apiFetch('/admin/whatsapp/status');
+  if (!res.ok) throw new Error('Failed to fetch WhatsApp Gateway status');
+  return await res.json();
+}
+
+/**
+ * 38. GET /api/v1/admin/whatsapp/qr
+ */
+export async function apiFetchWhatsAppGatewayQR(): Promise<{
+  status: string;
+  qr_code?: string;
+  qr_png_base64?: string;
+  generated_at?: string;
+  expires_at?: string;
+}> {
+  const res = await apiFetch('/admin/whatsapp/qr');
+  if (!res.ok) throw new Error('Failed to fetch WhatsApp pairing QR code');
+  return await res.json();
+}
+
+/**
+ * 39. POST /api/v1/admin/whatsapp/reconnect
+ */
+export async function apiReconnectWhatsAppGateway(): Promise<any> {
+  const res = await apiFetch('/admin/whatsapp/reconnect', { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to trigger WhatsApp reconnection');
+  return await res.json();
+}
+
+/**
+ * 40. POST /api/v1/admin/whatsapp/disconnect
+ */
+export async function apiDisconnectWhatsAppGateway(): Promise<any> {
+  const res = await apiFetch('/admin/whatsapp/disconnect', { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to disconnect WhatsApp');
+  return await res.json();
+}

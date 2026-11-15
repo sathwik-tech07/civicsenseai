@@ -128,13 +128,24 @@ class Settings(BaseModel):
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     # Meta WhatsApp Cloud API Configuration
-    WHATSAPP_PROVIDER: str = os.getenv("WHATSAPP_PROVIDER", "meta")
+    WHATSAPP_PROVIDER: str = os.getenv("WHATSAPP_PROVIDER", "whatsmeow")
     WHATSAPP_PHONE_NUMBER_ID: str = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
     WHATSAPP_ACCESS_TOKEN: str = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
     WHATSAPP_BUSINESS_ACCOUNT_ID: str = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "")
     WHATSAPP_VERIFY_TOKEN: str = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
     META_APP_SECRET: str = os.getenv("META_APP_SECRET", "")
     WHATSAPP_API_VERSION: str = os.getenv("WHATSAPP_API_VERSION", "v21.0")
+
+    # Go WhatsApp Gateway (Whatsmeow) Configuration
+    WHATSAPP_GATEWAY_URL: str = os.getenv("WHATSAPP_GATEWAY_URL", "http://localhost:8085")
+    WHATSAPP_GATEWAY_SECRET: str = os.getenv("WHATSAPP_GATEWAY_SECRET", "civicsense-wa-gateway-internal-secret-2026")
+    WHATSAPP_GATEWAY_ENABLED: bool = os.getenv(
+        "WHATSAPP_GATEWAY_ENABLED",
+        "true" if os.getenv("WHATSAPP_PROVIDER", "whatsmeow").lower() == "whatsmeow" else "false"
+    ).lower() in ("true", "1", "yes")
+
+    # Staging Isolation Guard
+    STAGING_DATABASE_ONLY: bool = os.getenv("STAGING_DATABASE_ONLY", "false").lower() in ("true", "1", "yes")
 
     # CORS origins
     # In development, defaults to standard local frontend ports.
@@ -194,6 +205,20 @@ def validate_production_security(settings_obj: Settings):
                 f"CRITICAL DATABASE CONFIGURATION ERROR: {env_capitalized} environment cannot use SQLite. "
                 "A managed PostgreSQL database must be configured via DATABASE_URL."
             )
+
+        if settings_obj.STAGING_DATABASE_ONLY:
+            staging_ref = "oayzaszhhpfjlpmaezmc"
+            prod_ref = "bcpgsvvjuxzowxqqmouk"
+            if prod_ref in db_url:
+                raise RuntimeError(
+                    f"CRITICAL STAGING ISOLATION ERROR: Production reference '{prod_ref}' detected "
+                    "in DATABASE_URL while STAGING_DATABASE_ONLY=true!"
+                )
+            if staging_ref not in db_url:
+                raise RuntimeError(
+                    f"CRITICAL STAGING ISOLATION ERROR: DATABASE_URL must target staging reference '{staging_ref}' "
+                    "when STAGING_DATABASE_ONLY=true!"
+                )
 
         # CORS Origins Security Validation
         cors_origins = [
@@ -266,33 +291,40 @@ def validate_production_security(settings_obj: Settings):
                     "for multimodal vision analysis (VISION_PROVIDER=gemini)."
                 )
 
-        # Meta WhatsApp Cloud API Security Validation in Production & Staging
-        # If any WhatsApp credentials are set, require full, secure production credentials
-        whatsapp_configured = any([
-            (settings_obj.WHATSAPP_PHONE_NUMBER_ID or "").strip(),
-            (settings_obj.WHATSAPP_ACCESS_TOKEN or "").strip(),
-            (settings_obj.META_APP_SECRET or "").strip(),
-            (settings_obj.WHATSAPP_VERIFY_TOKEN or "").strip(),
-        ])
-        if whatsapp_configured:
-            missing_wa = []
-            insecure_placeholders = {
-                "", "your_meta_app_secret_here", "your_whatsapp_access_token_here",
-                "your_verify_token_here", "changeme", "test", "secret"
-            }
-            if not (settings_obj.WHATSAPP_PHONE_NUMBER_ID or "").strip():
-                missing_wa.append("WHATSAPP_PHONE_NUMBER_ID")
-            if not (settings_obj.WHATSAPP_ACCESS_TOKEN or "").strip() or settings_obj.WHATSAPP_ACCESS_TOKEN.strip() in insecure_placeholders:
-                missing_wa.append("WHATSAPP_ACCESS_TOKEN")
-            if not (settings_obj.WHATSAPP_VERIFY_TOKEN or "").strip() or settings_obj.WHATSAPP_VERIFY_TOKEN.strip() in insecure_placeholders:
-                missing_wa.append("WHATSAPP_VERIFY_TOKEN")
-            if not (settings_obj.META_APP_SECRET or "").strip() or settings_obj.META_APP_SECRET.strip() in insecure_placeholders:
-                missing_wa.append("META_APP_SECRET")
-            if missing_wa:
+        # WhatsApp Security Validation in Production & Staging
+        if settings_obj.WHATSAPP_PROVIDER == "whatsmeow":
+            insecure_wa_secrets = {"", "secret", "changeme", "civicsense-wa-gateway-internal-secret-2026", "default"}
+            if not settings_obj.WHATSAPP_GATEWAY_SECRET or settings_obj.WHATSAPP_GATEWAY_SECRET in insecure_wa_secrets:
                 raise RuntimeError(
-                    f"CRITICAL WHATSAPP CONFIGURATION ERROR: WhatsApp is partially configured in {mode_str}. "
-                    f"Missing or insecure required environment variables: {', '.join(missing_wa)}."
+                    f"CRITICAL WHATSAPP CONFIGURATION ERROR: A cryptographically secure WHATSAPP_GATEWAY_SECRET "
+                    f"is required in {mode_str} when WHATSAPP_PROVIDER=whatsmeow."
                 )
+        elif settings_obj.WHATSAPP_PROVIDER == "meta":
+            whatsapp_configured = any([
+                (settings_obj.WHATSAPP_PHONE_NUMBER_ID or "").strip(),
+                (settings_obj.WHATSAPP_ACCESS_TOKEN or "").strip(),
+                (settings_obj.META_APP_SECRET or "").strip(),
+                (settings_obj.WHATSAPP_VERIFY_TOKEN or "").strip(),
+            ])
+            if whatsapp_configured:
+                missing_wa = []
+                insecure_placeholders = {
+                    "", "your_meta_app_secret_here", "your_whatsapp_access_token_here",
+                    "your_verify_token_here", "changeme", "test", "secret"
+                }
+                if not (settings_obj.WHATSAPP_PHONE_NUMBER_ID or "").strip():
+                    missing_wa.append("WHATSAPP_PHONE_NUMBER_ID")
+                if not (settings_obj.WHATSAPP_ACCESS_TOKEN or "").strip() or settings_obj.WHATSAPP_ACCESS_TOKEN.strip() in insecure_placeholders:
+                    missing_wa.append("WHATSAPP_ACCESS_TOKEN")
+                if not (settings_obj.WHATSAPP_VERIFY_TOKEN or "").strip() or settings_obj.WHATSAPP_VERIFY_TOKEN.strip() in insecure_placeholders:
+                    missing_wa.append("WHATSAPP_VERIFY_TOKEN")
+                if not (settings_obj.META_APP_SECRET or "").strip() or settings_obj.META_APP_SECRET.strip() in insecure_placeholders:
+                    missing_wa.append("META_APP_SECRET")
+                if missing_wa:
+                    raise RuntimeError(
+                        f"CRITICAL WHATSAPP CONFIGURATION ERROR: WhatsApp is partially configured in {mode_str}. "
+                        f"Missing or insecure required environment variables: {', '.join(missing_wa)}."
+                    )
 
         # Demo Accounts Security Validation
         if settings_obj.ENABLE_DEMO_ACCOUNTS:

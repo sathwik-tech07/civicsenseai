@@ -5,7 +5,7 @@ import {
   Users, Shield, Activity, Plus, Search,
   RefreshCw, CheckCircle2, XCircle, AlertCircle,
   Server, Database, Cpu, Check, X, ShieldAlert,
-  Edit2, UserCheck, Smartphone
+  Edit2, UserCheck, Smartphone, QrCode, Wifi, WifiOff
 } from 'lucide-react';
 import {
   apiFetchAdminUsers,
@@ -13,12 +13,16 @@ import {
   apiUpdateUserStatus,
   apiUpdateUserRole,
   apiFetchPlatformAuditLogs,
-  apiFetchSystemTelemetry
+  apiFetchSystemTelemetry,
+  apiFetchWhatsAppGatewayStatus,
+  apiFetchWhatsAppGatewayQR,
+  apiReconnectWhatsAppGateway,
+  apiDisconnectWhatsAppGateway
 } from '../services/apiClient';
 
 export const UserManagementPanel: React.FC = () => {
   const queryClient = useQueryClient();
-  const [activeSubTab, setActiveSubTab] = useState<'users' | 'audit' | 'telemetry'>('users');
+  const [activeSubTab, setActiveSubTab] = useState<'users' | 'audit' | 'telemetry' | 'whatsapp'>('users');
 
   // Filter & Search state for Users tab
   const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>('all');
@@ -82,6 +86,53 @@ export const UserManagementPanel: React.FC = () => {
     queryFn: apiFetchSystemTelemetry,
     enabled: activeSubTab === 'telemetry',
     refetchInterval: 8000,
+  });
+
+  // 4. Query: WhatsApp Gateway Status & QR
+  const {
+    data: waStatus,
+    isLoading: isLoadingWaStatus,
+    refetch: refetchWaStatus,
+  } = useQuery({
+    queryKey: ['admin-whatsapp-status'],
+    queryFn: apiFetchWhatsAppGatewayStatus,
+    enabled: activeSubTab === 'whatsapp',
+    refetchInterval: 5000,
+  });
+
+  const {
+    data: waQR,
+    isLoading: isLoadingWaQR,
+    refetch: refetchWaQR,
+  } = useQuery({
+    queryKey: ['admin-whatsapp-qr'],
+    queryFn: apiFetchWhatsAppGatewayQR,
+    enabled: activeSubTab === 'whatsapp' && (!waStatus?.logged_in),
+    refetchInterval: 5000,
+  });
+
+  const reconnectWaMutation = useMutation({
+    mutationFn: apiReconnectWhatsAppGateway,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-whatsapp-status'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-whatsapp-qr'] });
+      showToast('Reconnection triggered. Checking gateway status...');
+    },
+    onError: (err: any) => {
+      showToast(err.message || 'Failed to trigger reconnect', 'error');
+    },
+  });
+
+  const disconnectWaMutation = useMutation({
+    mutationFn: apiDisconnectWhatsAppGateway,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-whatsapp-status'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-whatsapp-qr'] });
+      showToast('WhatsApp connection disconnected');
+    },
+    onError: (err: any) => {
+      showToast(err.message || 'Failed to disconnect', 'error');
+    },
   });
 
   // Mutations
@@ -245,6 +296,7 @@ export const UserManagementPanel: React.FC = () => {
             { id: 'users', label: 'Users & Roles', icon: Users },
             { id: 'audit', label: 'Audit Logs', icon: Activity },
             { id: 'telemetry', label: 'System Health', icon: Server },
+            { id: 'whatsapp', label: 'WhatsApp Gateway', icon: Smartphone },
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = activeSubTab === tab.id;
@@ -768,6 +820,315 @@ export const UserManagementPanel: React.FC = () => {
               </div>
             </>
           )}
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════
+          TAB 4: WHATSAPP GATEWAY (WHATSMEOW)
+      ═══════════════════════════════════════════ */}
+      {activeSubTab === 'whatsapp' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Header & Controls Bar */}
+          <div style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 16,
+            background: 'rgba(15, 23, 42, 0.6)',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
+            borderRadius: 18,
+            padding: '18px 24px',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <div style={{
+                width: 44,
+                height: 44,
+                borderRadius: 12,
+                background: waStatus?.connected
+                  ? 'rgba(16, 185, 129, 0.15)'
+                  : 'rgba(245, 158, 11, 0.15)',
+                border: `1px solid ${waStatus?.connected ? '#10B981' : '#F59E0B'}`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: waStatus?.connected ? '#10B981' : '#F59E0B',
+              }}>
+                {waStatus?.connected ? <Wifi size={22} /> : <WifiOff size={22} />}
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#F8FAFC', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  WhatsApp Web Gateway (Whatsmeow)
+                  <span style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    padding: '2px 10px',
+                    borderRadius: 20,
+                    background: waStatus?.connected
+                      ? 'rgba(16, 185, 129, 0.2)'
+                      : 'rgba(245, 158, 11, 0.2)',
+                    color: waStatus?.connected ? '#34D399' : '#FBBF24',
+                    border: `1px solid ${waStatus?.connected ? 'rgba(16, 185, 129, 0.4)' : 'rgba(245, 158, 11, 0.4)'}`,
+                  }}>
+                    {waStatus?.status?.toUpperCase() || 'OFFLINE'}
+                  </span>
+                </h3>
+                <p style={{ margin: '4px 0 0 0', fontSize: 12, color: '#94A3B8' }}>
+                  Self-hosted Go microservice powered by whatsmeow multi-device protocol. Zero Cloud API fees.
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button
+                onClick={() => {
+                  refetchWaStatus();
+                  refetchWaQR();
+                  showToast('WhatsApp Gateway refreshed');
+                }}
+                disabled={isLoadingWaStatus || isLoadingWaQR}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '9px 16px',
+                  borderRadius: 10,
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  color: '#F8FAFC',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                <RefreshCw size={13} className={(isLoadingWaStatus || isLoadingWaQR) ? 'animate-spin' : ''} />
+                Refresh
+              </button>
+
+              <button
+                onClick={() => reconnectWaMutation.mutate()}
+                disabled={reconnectWaMutation.isPending}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '9px 16px',
+                  borderRadius: 10,
+                  border: '1px solid rgba(0, 212, 255, 0.3)',
+                  background: 'rgba(0, 212, 255, 0.12)',
+                  color: '#00D4FF',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                <RefreshCw size={13} className={reconnectWaMutation.isPending ? 'animate-spin' : ''} />
+                Reconnect
+              </button>
+
+              {waStatus?.connected && (
+                <button
+                  onClick={() => disconnectWaMutation.mutate()}
+                  disabled={disconnectWaMutation.isPending}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '9px 16px',
+                    borderRadius: 10,
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    background: 'rgba(239, 68, 68, 0.12)',
+                    color: '#EF4444',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <X size={13} />
+                  Disconnect
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Telemetry Stat Cards */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+            gap: 14,
+          }}>
+            {[
+              {
+                label: 'Connection State',
+                value: waStatus?.connected ? 'Online & Linked' : 'Awaiting Connection',
+                color: waStatus?.connected ? '#10B981' : '#F59E0B',
+                desc: waStatus?.jid ? `JID: ${waStatus.jid}` : 'No paired device JID',
+              },
+              {
+                label: 'Memory Allocation',
+                value: `${waStatus?.memory_alloc_mb?.toFixed(1) || '0.0'} MB`,
+                color: '#00D4FF',
+                desc: 'Pure Go SQLite RAM footprint',
+              },
+              {
+                label: 'Active Goroutines',
+                value: waStatus?.goroutines || 0,
+                color: '#8B5CF6',
+                desc: 'Websocket & event channels',
+              },
+              {
+                label: 'Service Uptime',
+                value: waStatus?.uptime_seconds ? `${Math.floor(waStatus.uptime_seconds / 60)}m ${waStatus.uptime_seconds % 60}s` : '0s',
+                color: '#EC4899',
+                desc: 'Continuous gateway runtime',
+              },
+            ].map((stat, idx) => (
+              <div
+                key={idx}
+                style={{
+                  background: 'rgba(15, 23, 42, 0.65)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  borderRadius: 16,
+                  padding: 18,
+                }}
+              >
+                <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {stat.label}
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: stat.color, margin: '6px 0 2px 0' }}>
+                  {stat.value}
+                </div>
+                <div style={{ fontSize: 11, color: '#64748B' }}>
+                  {stat.desc}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Device Pairing or Active State Box */}
+          <div style={{
+            background: 'rgba(15, 23, 42, 0.65)',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
+            borderRadius: 20,
+            padding: 28,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            textAlign: 'center',
+          }}>
+            {waStatus?.logged_in ? (
+              <div style={{ maxWidth: 440, padding: 20 }}>
+                <div style={{
+                  width: 72,
+                  height: 72,
+                  borderRadius: '50%',
+                  background: 'rgba(16, 185, 129, 0.15)',
+                  border: '2px solid #10B981',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#10B981',
+                  margin: '0 auto 18px auto',
+                }}>
+                  <CheckCircle2 size={38} />
+                </div>
+                <h3 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: '#F8FAFC' }}>
+                  WhatsApp Device Successfully Paired
+                </h3>
+                <p style={{ margin: '8px 0 16px 0', fontSize: 13, color: '#94A3B8', lineHeight: 1.6 }}>
+                  CivicSense AI is actively receiving citizen complaints, photo reports, and staff commands through your linked WhatsApp number:
+                </p>
+                <div style={{
+                  display: 'inline-block',
+                  background: 'rgba(0, 0, 0, 0.4)',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  padding: '8px 18px',
+                  borderRadius: 12,
+                  color: '#34D399',
+                  fontFamily: 'monospace',
+                  fontSize: 14,
+                  fontWeight: 700,
+                }}>
+                  {waStatus?.jid || 'WhatsApp Multi-Device Active'}
+                </div>
+              </div>
+            ) : (
+              <div style={{ maxWidth: 540 }}>
+                <div style={{
+                  width: 56,
+                  height: 56,
+                  borderRadius: 16,
+                  background: 'rgba(0, 212, 255, 0.12)',
+                  border: '1px solid rgba(0, 212, 255, 0.4)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#00D4FF',
+                  margin: '0 auto 16px auto',
+                }}>
+                  <QrCode size={28} />
+                </div>
+                <h3 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: '#F8FAFC' }}>
+                  Link WhatsApp Business Number
+                </h3>
+                <p style={{ margin: '8px 0 20px 0', fontSize: 13, color: '#94A3B8', lineHeight: 1.5 }}>
+                  Scan this QR code with WhatsApp on your official city or test device to pair CivicSense AI without Cloud API tokens.
+                </p>
+
+                {waQR?.qr_png_base64 ? (
+                  <div style={{
+                    display: 'inline-block',
+                    background: '#FFFFFF',
+                    padding: 16,
+                    borderRadius: 16,
+                    boxShadow: '0 10px 40px rgba(0, 0, 0, 0.5), 0 0 25px rgba(0, 212, 255, 0.2)',
+                    marginBottom: 20,
+                  }}>
+                    <img
+                      src={`data:image/png;base64,${waQR.qr_png_base64}`}
+                      alt="WhatsApp Pairing QR Code"
+                      style={{ width: 220, height: 220, display: 'block' }}
+                    />
+                  </div>
+                ) : (
+                  <div style={{
+                    width: 220,
+                    height: 220,
+                    borderRadius: 16,
+                    background: 'rgba(0, 0, 0, 0.3)',
+                    border: '1px dashed rgba(255, 255, 255, 0.2)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 10,
+                    color: '#64748B',
+                    margin: '0 auto 20px auto',
+                  }}>
+                    <RefreshCw size={24} className="animate-spin" />
+                    <span style={{ fontSize: 12 }}>Waiting for Gateway QR...</span>
+                  </div>
+                )}
+
+                <div style={{
+                  background: 'rgba(0, 0, 0, 0.35)',
+                  border: '1px solid rgba(255, 255, 255, 0.06)',
+                  borderRadius: 14,
+                  padding: '14px 18px',
+                  textAlign: 'left',
+                  fontSize: 12,
+                  color: '#94A3B8',
+                  lineHeight: 1.8,
+                }}>
+                  <strong style={{ color: '#F8FAFC' }}>Pairing Instructions:</strong><br />
+                  1. Open WhatsApp on your phone.<br />
+                  2. Tap <strong>Menu (⋮)</strong> on Android or <strong>Settings</strong> on iPhone.<br />
+                  3. Tap <strong>Linked Devices</strong>, then <strong>Link a Device</strong>.<br />
+                  4. Point your phone camera at this QR code to complete pairing.
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

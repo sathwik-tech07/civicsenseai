@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  whatsapp-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: civicsense-whatsapp-gateway
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    environment:
+      - PORT=8085
+      - SESSION_DB_PATH=/data/whatsapp_gateway_sessions.db
+      - FASTAPI_BACKEND_URL=http://backend:8000
+      - WHATSAPP_GATEWAY_SECRET=${WHATSAPP_GATEWAY_SECRET:?WHATSAPP_GATEWAY_SECRET must be set in environment}
+      - LOG_LEVEL=INFO
+    volumes:
+      - whatsapp_session_data:/data
+    networks:
+      - civicsense-net
+
+volumes:
+  whatsapp_session_data:
+    driver: local
+
+networks:
+  civicsense-net:
+    external: true

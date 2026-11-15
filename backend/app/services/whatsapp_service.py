@@ -10,6 +10,10 @@ import re
 import os
 import time
 import uuid
+import copy
+import secrets
+import hashlib
+import hmac
 import logging
 import asyncio
 import threading
@@ -21,6 +25,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.services.ai_service import AIService
+from app.services.storage_service import get_storage_provider
+from app.utils.image_security import detect_image_format
 from app.models.incident import Incident
 from app.models.ai_analysis import AIAnalysis
 from app.models.workflow import WorkflowHistory, AuditLog
@@ -93,47 +99,337 @@ class WhatsAppOversizedMediaError(WhatsAppServiceError):
 
 class PendingSessionStore:
     """
-    Thread-safe session store for pending WhatsApp complaint drafts.
-    Stores unconfirmed incident drafts awaiting citizen confirmation before database insertion.
+    Dual-mode session store for pending WhatsApp complaint drafts.
+    Supports PostgreSQL-backed persistence via WhatsAppPendingSession with
+    automatic fallback to thread-safe in-memory caching when a DB session is
+    unavailable or during unmigrated local/test runs.
+
     TTL: Default 1800 seconds (30 minutes).
+    Preserves:
+    - Draft complaint metadata (title, category, severity, description).
+    - Pinned GPS coordinates (lat, lng, address).
+    - Staged S3 evidence object keys (staged_storage_key / photo_url).
     """
     def __init__(self, ttl_seconds: int = 1800):
         self.ttl_seconds = ttl_seconds
         self._store: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
 
-    def store_draft(self, phone: str, draft: Dict[str, Any]) -> None:
+    def store_draft(self, phone: str, draft: Dict[str, Any], db: Optional[Session] = None) -> None:
         cleaned = re.sub(r"[^\d]", "", phone)
+        expires_at = time.time() + self.ttl_seconds
+
+        # 1. Update in-memory cache under thread lock
         with self._lock:
             self._store[cleaned] = {
-                "draft": draft,
-                "expires_at": time.time() + self.ttl_seconds
+                "draft": copy.deepcopy(draft),
+                "expires_at": expires_at
             }
 
-    def get_draft(self, phone: str) -> Optional[Dict[str, Any]]:
+        # 2. Persist to PostgreSQL if db session provided
+        if db is not None:
+            try:
+                from app.models.whatsapp_session import WhatsAppPendingSession
+                from sqlalchemy.orm.attributes import flag_modified
+                session_obj = db.query(WhatsAppPendingSession).filter(WhatsAppPendingSession.phone == cleaned).first()
+                if session_obj:
+                    session_obj.draft_data = copy.deepcopy(draft)
+                    session_obj.expires_at = expires_at
+                    session_obj.updated_at = datetime.utcnow()
+                    flag_modified(session_obj, "draft_data")
+                else:
+                    session_obj = WhatsAppPendingSession(
+                        phone=cleaned,
+                        draft_data=copy.deepcopy(draft),
+                        expires_at=expires_at
+                    )
+                    db.add(session_obj)
+                db.commit()
+            except Exception as e:
+                logger.debug("Database session persistence fallback to in-memory: %s", e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+    def get_draft(self, phone: str, db: Optional[Session] = None) -> Optional[Dict[str, Any]]:
         cleaned = re.sub(r"[^\d]", "", phone)
+        now = time.time()
+
+        # 1. Check database if db session provided
+        if db is not None:
+            try:
+                from app.models.whatsapp_session import WhatsAppPendingSession
+                db.expire_all()
+                session_obj = db.query(WhatsAppPendingSession).filter(WhatsAppPendingSession.phone == cleaned).first()
+                if session_obj:
+                    if session_obj.expires_at < now:
+                        db.delete(session_obj)
+                        db.commit()
+                        with self._lock:
+                            self._store.pop(cleaned, None)
+                        return None
+                    with self._lock:
+                        self._store[cleaned] = {
+                            "draft": copy.deepcopy(session_obj.draft_data),
+                            "expires_at": session_obj.expires_at
+                        }
+                    return copy.deepcopy(session_obj.draft_data)
+            except Exception as e:
+                logger.debug("Database session retrieval fallback to in-memory: %s", e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+        # 2. Check in-memory cache
         with self._lock:
             entry = self._store.get(cleaned)
             if not entry:
                 return None
-            if time.time() > entry["expires_at"]:
+            if now > entry["expires_at"]:
                 del self._store[cleaned]
                 return None
-            return entry["draft"]
+            return copy.deepcopy(entry["draft"])
 
-    def clear_draft(self, phone: str) -> Optional[Dict[str, Any]]:
+    def clear_draft(self, phone: str, db: Optional[Session] = None) -> Optional[Dict[str, Any]]:
         cleaned = re.sub(r"[^\d]", "", phone)
+        now = time.time()
+        draft_result = None
+
+        # 1. Clear from database if db session provided
+        if db is not None:
+            try:
+                from app.models.whatsapp_session import WhatsAppPendingSession
+                session_obj = db.query(WhatsAppPendingSession).filter(WhatsAppPendingSession.phone == cleaned).first()
+                if session_obj:
+                    if session_obj.expires_at >= now:
+                        draft_result = copy.deepcopy(session_obj.draft_data)
+                    db.delete(session_obj)
+                    db.commit()
+            except Exception as e:
+                logger.debug("Database session cleanup fallback to in-memory: %s", e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+        # 2. Clear from in-memory cache
         with self._lock:
             entry = self._store.pop(cleaned, None)
-            if not entry:
-                return None
-            if time.time() > entry["expires_at"]:
-                return None
-            return entry["draft"]
+            if entry and entry["expires_at"] >= now:
+                if draft_result is None:
+                    draft_result = copy.deepcopy(entry["draft"])
 
-    def clear_all(self) -> None:
+        return draft_result
+
+    def clear_all(self, db: Optional[Session] = None) -> None:
         with self._lock:
             self._store.clear()
+        if db is not None:
+            try:
+                from app.models.whatsapp_session import WhatsAppPendingSession
+                db.query(WhatsAppPendingSession).delete()
+                db.commit()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+
+# ==============================================================================
+# SECURE STAFF DEVICE LINKING & OTP MANAGER (ZERO PASSWORD OVER CHAT)
+# ==============================================================================
+
+class StaffDeviceLinkManager:
+    """
+    Cryptographically secure, single-use, rate-limited, time-expiring OTP manager
+    for linking official municipal staff WhatsApp devices without transmitting passwords.
+
+    Security Controls:
+    1. Zero Password Transmission: Passwords are NEVER accepted or required over WhatsApp.
+    2. Single-Use OTP: Expired or consumed immediately upon first verification.
+    3. Expiration: Strictly valid for 300 seconds (5 minutes).
+    4. Rate-Limiting: Max 3 OTP requests per 10 minutes per phone/email; max 3 failed verification attempts before revocation.
+    5. Anti-Enumeration: Non-existent or unauthorized emails return generic denial without leaking account presence.
+    6. Zero-Leak Logging: OTPs are NEVER logged in plaintext; only SHA-256 hashes are held in memory.
+    7. Strict RBAC: Only accounts pre-provisioned by administrators with role in ('engineer', 'commissioner', 'admin') may be linked.
+    """
+    def __init__(self, ttl_seconds: int = 300, max_attempts: int = 3):
+        self.ttl_seconds = ttl_seconds
+        self.max_attempts = max_attempts
+        self._otps: Dict[str, Dict[str, Any]] = {}
+        self._request_rate: Dict[str, List[float]] = {}
+        self._lock = threading.Lock()
+
+    def _clean_phone(self, phone: str) -> str:
+        return re.sub(r"[^\d]", "", phone or "")
+
+    def _is_rate_limited(self, identifier: str) -> bool:
+        now = time.time()
+        window = 600.0  # 10 minutes
+        with self._lock:
+            timestamps = self._request_rate.get(identifier, [])
+            timestamps = [t for t in timestamps if now - t < window]
+            if len(timestamps) >= 3:
+                return True
+            timestamps.append(now)
+            self._request_rate[identifier] = timestamps
+            return False
+
+    def request_otp(
+        self,
+        db: Session,
+        sender_phone: str,
+        staff_email: str,
+    ) -> Tuple[bool, str, Optional[str]]:
+        clean_phone = self._clean_phone(sender_phone)
+        clean_email = (staff_email or "").strip().lower()
+
+        if not clean_phone or not clean_email or "@" not in clean_email:
+            return False, "⚠️ Invalid request format. Please provide a valid official staff email address.", None
+
+        # Check rate limiting on requests
+        if self._is_rate_limited(clean_phone) or self._is_rate_limited(clean_email):
+            logger.warning("Staff device link rate limit exceeded for %s", clean_phone[-4:])
+            return False, "⚠️ Rate limit exceeded: You may only request up to 3 linking codes per 10 minutes. Please wait before requesting another code.", None
+
+        # Anti-enumeration lookup: generic response if account does not exist or lacks staff role
+        staff_user = db.query(User).filter(User.email.ilike(clean_email)).first()
+        if not staff_user or not staff_user.is_active or staff_user.status == "inactive" or staff_user.role not in ("engineer", "commissioner", "admin"):
+            logger.warning("Staff link attempted for ineligible/unknown account %s from device ending in %s", clean_email, clean_phone[-4:])
+            return False, "⚠️ Access denied. Unable to initiate device linking for the specified account. Please verify your official municipal email or contact your administrator.", None
+
+        # Generate 6-digit numeric OTP
+        raw_otp = f"{secrets.randbelow(900000) + 100000}"
+        otp_hash = hashlib.sha256(raw_otp.encode("utf-8")).hexdigest()
+        now = time.time()
+        expires_at = now + self.ttl_seconds
+
+        with self._lock:
+            self._otps[clean_phone] = {
+                "otp_hash": otp_hash,
+                "email": clean_email,
+                "role": staff_user.role,
+                "full_name": staff_user.full_name,
+                "department": staff_user.department,
+                "expires_at": expires_at,
+                "attempts": 0,
+                "used": False,
+                "created_at": now,
+            }
+
+        # NEVER log raw_otp!
+        logger.info("Generated staff device linking code for %s (role: %s, device ending in: %s)", staff_user.email, staff_user.role, clean_phone[-4:])
+
+        # Mask email for safe user-facing message
+        parts = clean_email.split("@")
+        name_part = parts[0]
+        domain_part = parts[1] if len(parts) > 1 else "civicsense.ai"
+        masked_name = name_part[0] + "***" + (name_part[-1] if len(name_part) > 1 else "")
+        masked_email = f"{masked_name}@{domain_part}"
+
+        msg = (
+            f"🔐 *Staff Device Linking Initiated*\n\n"
+            f"A single-use verification code has been generated for your municipal staff account (`{masked_email}`).\n\n"
+            f"To complete device linking, reply with:\n"
+            f"`verify <code>`\n\n"
+            f"⏱️ *Code expires in 5 minutes.* It is single-use and rate-limited.\n"
+            f"⚠️ *Security Notice:* Passwords must NEVER be transmitted over WhatsApp."
+        )
+        return True, msg, raw_otp
+
+    def verify_otp(
+        self,
+        db: Session,
+        sender_phone: str,
+        submitted_code: str,
+    ) -> Tuple[bool, str]:
+        clean_phone = self._clean_phone(sender_phone)
+        code = (submitted_code or "").strip()
+
+        with self._lock:
+            if clean_phone not in self._otps:
+                return False, "⚠️ No active device linking request found for this phone number. Please initiate linking first by typing: `staff link <email>`"
+
+            entry = self._otps[clean_phone]
+
+            # Single-use check
+            if entry.get("used", False):
+                del self._otps[clean_phone]
+                return False, "⚠️ This verification code has already been used. Please request a new linking code."
+
+            # Expiry check
+            now = time.time()
+            if now > entry.get("expires_at", 0):
+                del self._otps[clean_phone]
+                return False, "⚠️ Verification code has expired. Linking codes are only valid for 5 minutes. Please request a new code using `staff link <email>`."
+
+            # Rate limit verification attempts (max 3)
+            if entry.get("attempts", 0) >= self.max_attempts:
+                del self._otps[clean_phone]
+                return False, "⚠️ Too many invalid verification attempts. This linking code has been revoked for security. Please request a new code."
+
+            # Constant-time comparison
+            candidate_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+            if not hmac.compare_digest(candidate_hash, entry["otp_hash"]):
+                entry["attempts"] += 1
+                remaining = self.max_attempts - entry["attempts"]
+                if remaining <= 0:
+                    del self._otps[clean_phone]
+                    return False, "⚠️ Invalid verification code. Maximum attempts exceeded. Code has been revoked."
+                return False, f"⚠️ Invalid verification code. {remaining} attempt(s) remaining."
+
+            # Match! Mark used and remove immediately (single-use guaranteed)
+            entry["used"] = True
+            email = entry["email"]
+            del self._otps[clean_phone]
+
+        # Link verified phone to the staff user in DB
+        staff_user = db.query(User).filter(User.email.ilike(email)).first()
+        if not staff_user or not staff_user.is_active or staff_user.status == "inactive":
+            return False, "⚠️ Access denied. Staff account is inactive. Please contact your system administrator."
+
+        user_id = f"usr-wa-{clean_phone}"
+        wa_user = db.query(User).filter(User.id == user_id).first()
+        if not wa_user:
+            wa_user = User(
+                id=user_id,
+                email=f"{staff_user.role}_{clean_phone}@civicsense.ai",
+                full_name=staff_user.full_name,
+                hashed_password=staff_user.hashed_password,
+                role=staff_user.role,
+                department=staff_user.department,
+                status="active",
+                is_active=True,
+            )
+            db.add(wa_user)
+        else:
+            wa_user.role = staff_user.role
+            wa_user.full_name = staff_user.full_name
+            wa_user.department = staff_user.department
+            wa_user.status = "active"
+            wa_user.is_active = True
+
+        audit = AuditLog(
+            incident_id="SYSTEM-STAFF-WHATSAPP-LINK",
+            who=f"{staff_user.full_name} ({staff_user.role.title()})",
+            what=f"Linked verified WhatsApp device ({clean_phone[-4:]}) using single-use OTP for account {staff_user.email}",
+            when=datetime.utcnow(),
+            result="Success"
+        )
+        db.add(audit)
+        db.commit()
+        db.refresh(wa_user)
+
+        return True, f"✅ Verified device linked successfully. Welcome, {staff_user.full_name} ({staff_user.role.title()} — {staff_user.department})."
+
+    def clear(self) -> None:
+        """Clears all in-memory OTP states and rate limits (for testing isolation)."""
+        with self._lock:
+            self._otps.clear()
+            self._request_rate.clear()
 
 
 # ==============================================================================
@@ -173,6 +469,7 @@ class WhatsAppService:
         self.max_retries = max_retries
         self.backoff_seconds = backoff_seconds
         self.pending_sessions = PendingSessionStore()
+        self.otp_manager = StaffDeviceLinkManager()
 
     def _redact_secrets(self, text: Any) -> str:
         """Redacts sensitive credentials from error messages, URLs, and exception text."""
@@ -201,6 +498,61 @@ class WhatsAppService:
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json",
         }
+
+    @property
+    def is_whatsmeow(self) -> bool:
+        """Returns True if the Go WhatsApp Gateway (whatsmeow) is the active provider."""
+        provider = getattr(settings, "WHATSAPP_PROVIDER", "whatsmeow")
+        return str(provider).lower() in ("whatsmeow", "gateway")
+
+    async def _send_via_gateway(
+        self,
+        recipient: str,
+        message_type: str = "text",
+        text: Optional[str] = None,
+        caption: Optional[str] = None,
+        media_base64: Optional[str] = None,
+        media_mime_type: Optional[str] = None,
+        media_url: Optional[str] = None,
+    ) -> str:
+        """
+        Dispatches an outbound message to the internal Go WhatsApp Gateway (whatsmeow).
+        Uses shared HMAC/Bearer token authentication.
+        """
+        gateway_url = getattr(settings, "WHATSAPP_GATEWAY_URL", "http://localhost:8085").rstrip("/")
+        endpoint = f"{gateway_url}/api/v1/send"
+        secret = getattr(settings, "WHATSAPP_GATEWAY_SECRET", "civicsense-wa-gateway-internal-secret-2026")
+
+        payload = {
+            "recipient": recipient,
+            "type": message_type,
+            "message_type": message_type,
+            "text": text,
+            "text_body": text,
+            "caption": caption,
+            "media_base64": media_base64,
+            "media_mime_type": media_mime_type,
+            "media_url": media_url,
+        }
+        headers = {
+            "Authorization": f"Bearer {secret}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(endpoint, json=payload, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+                msg_id = data.get("message_id") or f"wam_{int(time.time())}"
+                logger.info("Outbound message successfully dispatched via WhatsApp Gateway to %s (id=%s)", recipient, msg_id)
+                return msg_id
+        except httpx.HTTPStatusError as hse:
+            logger.error("WhatsApp Gateway returned error HTTP %d for recipient %s: %s", hse.response.status_code, recipient, hse.response.text)
+            raise WhatsAppAPIError(f"WhatsApp Gateway dispatch failed: {hse.response.text}", status_code=hse.response.status_code)
+        except Exception as e:
+            logger.error("Failed to connect to WhatsApp Gateway at %s: %s", endpoint, e)
+            raise WhatsAppNetworkError(f"Failed to communicate with WhatsApp Gateway: {e}")
 
     @staticmethod
     def _clean_recipient(recipient: str) -> str:
@@ -235,9 +587,10 @@ class WhatsAppService:
                 f"Meta API authentication failed (HTTP {status_code}): {err_msg}"
             )
         elif status_code == 400:
-            if "phone number" in err_msg.lower() or "recipient" in err_msg.lower():
+            err_code = err_details.get("code") if "err_details" in locals() else None
+            if err_code == 131030 or "phone number" in err_msg.lower() or "recipient" in err_msg.lower() or "not in allowed list" in err_msg.lower():
                 raise WhatsAppInvalidRecipientError(
-                    f"Meta rejected recipient phone number: {err_msg}"
+                    f"Meta rejected recipient phone number: {err_msg} (Test number requires recipient to be added to Meta Developer allowed phone number list)."
                 )
             raise WhatsAppAPIError(
                 f"Meta API Bad Request (HTTP 400): {err_msg}",
@@ -312,14 +665,19 @@ class WhatsAppService:
 
     async def send_text_message(self, recipient: str, text: str) -> str:
         """
-        Sends a standard text message to a citizen via Meta WhatsApp Cloud API.
-        Returns the Meta message ID (wamid...).
+        Sends a standard text message to a citizen via WhatsApp.
+        Routes to Go Gateway (whatsmeow) or Meta Cloud API according to WHATSAPP_PROVIDER.
+        Returns the message ID.
         """
-        self._validate_credentials()
-        to_phone = self._clean_recipient(recipient)
-
         if not text or not isinstance(text, str) or not text.strip():
             raise ValueError("Message text must be a non-empty string.")
+
+        to_phone = self._clean_recipient(recipient)
+
+        if self.is_whatsmeow:
+            return await self._send_via_gateway(recipient=to_phone, message_type="text", text=text.strip())
+
+        self._validate_credentials()
 
         endpoint = f"{self.base_url}/{self.phone_number_id}/messages"
         payload = {
@@ -349,17 +707,24 @@ class WhatsAppService:
     ) -> str:
         """
         Sends an interactive quick-reply button message to a citizen.
-        Meta limits:
+        If using whatsmeow (WhatsApp Web), renders the options cleanly in text format.
+        Meta limits (when using Meta provider):
         - Exactly 1 to 3 buttons
         - Button title <= 20 characters
         - Button ID <= 256 characters
         - Body text <= 1024 characters
         """
-        self._validate_credentials()
-        to_phone = self._clean_recipient(recipient)
-
         if not body_text or not isinstance(body_text, str) or not body_text.strip():
             raise ValueError("Interactive body_text must be a non-empty string.")
+
+        to_phone = self._clean_recipient(recipient)
+
+        if self.is_whatsmeow:
+            options_text = "\n".join([f"• *{btn.get('title', '').upper()}*" for btn in buttons if btn.get('title')])
+            rendered_text = f"{body_text.strip()}\n\nReply with:\n{options_text}"
+            return await self._send_via_gateway(recipient=to_phone, message_type="text", text=rendered_text)
+
+        self._validate_credentials()
 
         if len(body_text) > 1024:
             raise ValueError(f"Interactive body text exceeds Meta limit of 1024 chars (got {len(body_text)}).")
@@ -541,6 +906,7 @@ class WhatsAppService:
         image_bytes: bytes,
         caption: Optional[str] = None,
         filename: Optional[str] = None,
+        db: Optional[Session] = None,
     ) -> Dict[str, Any]:
         """
         Processes an incoming photo from a citizen:
@@ -549,15 +915,49 @@ class WhatsAppService:
         3. Stashes draft in PendingSessionStore.
         4. Sends interactive confirmation buttons to the citizen.
         """
-        safe_fn = filename or f"whatsapp_{int(time.time())}_{uuid.uuid4().hex[:6]}.jpg"
-        upload_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
-        os.makedirs(upload_dir, exist_ok=True)
-        file_path = os.path.join(upload_dir, safe_fn)
+        # Validate file size limits
+        max_bytes = getattr(settings, "MAX_UPLOAD_SIZE_BYTES", 10485760)
+        if len(image_bytes) > max_bytes:
+            limit_mb = max(1, max_bytes // (1024 * 1024))
+            logger.warning("WhatsApp photo from %s rejected: exceeds max upload size (%d > %d)", sender_phone, len(image_bytes), max_bytes)
+            await self.send_text_message(
+                sender_phone,
+                f"❌ Photo exceeds maximum allowed size ({limit_mb} MB). Please compress and resend."
+            )
+            return {"error": "File size exceeds limit"}
 
-        with open(file_path, "wb") as f:
-            f.write(image_bytes)
+        # Validate MIME format using magic bytes
+        format_info = detect_image_format(image_bytes)
+        if not format_info:
+            logger.warning("WhatsApp photo from %s rejected: invalid magic bytes or unsupported format", sender_phone)
+            await self.send_text_message(
+                sender_phone,
+                "❌ Unsupported image format. Please send a genuine JPEG, PNG, or WEBP photo."
+            )
+            return {"error": "Invalid image format"}
 
-        photo_url = f"/uploads/{safe_fn}"
+        _, mime_type, safe_ext = format_info
+
+        # Persist photo using configured storage provider (Supabase S3 or Local)
+        storage_provider = get_storage_provider()
+        try:
+            stored = await storage_provider.store_image(
+                contents=image_bytes,
+                safe_ext=safe_ext,
+                mime_type=mime_type,
+                prefix="uploads"
+            )
+        except Exception as e:
+            logger.error("Storage upload failed for WhatsApp photo report from %s: %s", sender_phone, e)
+            await self.send_text_message(
+                sender_phone,
+                "❌ We could not store your complaint photo due to a storage service error. Please try sending your photo again later."
+            )
+            return {"error": "Storage upload failed"}
+
+        stored_key = stored["filename"]
+        photo_url = stored_key if stored_key.startswith("uploads/") else f"/uploads/{stored_key}"
+        safe_fn = filename or os.path.basename(stored_key)
 
         # Analyze using Gemini 2.5 Flash Multimodal Vision
         try:
@@ -598,7 +998,7 @@ class WhatsAppService:
         inc_type = type_mapping.get(cat.lower(), "road_damage")
 
         # Stash draft in pending session store
-        existing = self.pending_sessions.get_draft(sender_phone)
+        existing = self.pending_sessions.get_draft(sender_phone, db=db)
         effective_address = (existing and existing.get("address")) or "Victoria Road Corridor (Reported via WhatsApp)"
         effective_lat = (existing and existing.get("lat")) or 12.9716
         effective_lng = (existing and existing.get("lng")) or 77.5946
@@ -625,7 +1025,7 @@ class WhatsAppService:
             "sender_phone": sender_phone,
             "analysis_raw": analysis
         }
-        self.pending_sessions.store_draft(sender_phone, draft_data)
+        self.pending_sessions.store_draft(sender_phone, draft_data, db=db)
 
         # Build interactive confirmation message
         body_text = (
@@ -663,7 +1063,7 @@ class WhatsAppService:
         """
         Creates a formal database Incident and AIAnalysis record upon explicit citizen confirmation.
         """
-        draft = self.pending_sessions.clear_draft(sender_phone)
+        draft = self.pending_sessions.clear_draft(sender_phone, db=db)
         if not draft:
             return None
 
@@ -787,9 +1187,45 @@ class WhatsAppService:
     async def execute_cancellation_reply(
         self,
         sender_phone: str,
+        db: Optional[Session] = None,
     ) -> None:
-        """Discards pending draft and confirms via WhatsApp."""
-        self.pending_sessions.clear_draft(sender_phone)
+        """Discards pending draft, cleans up staged unconfirmed photo, and confirms via WhatsApp."""
+        draft = self.pending_sessions.clear_draft(sender_phone, db=db)
+        if draft and draft.get("photo_url"):
+            photo_ref = str(draft["photo_url"]).strip()
+            is_attached = False
+            own_db = False
+            active_db = db
+            if active_db is None:
+                try:
+                    from app.database import SessionLocal
+                    active_db = SessionLocal()
+                    own_db = True
+                except Exception:
+                    active_db = None
+            if active_db:
+                try:
+                    is_attached = active_db.query(Incident).filter(
+                        (Incident.photo_url == photo_ref) | (Incident.resolved_photo_url == photo_ref)
+                    ).first() is not None
+                except Exception as query_err:
+                    logger.warning("Could not check incident attachment for %s on cancellation: %s", photo_ref, query_err)
+                    is_attached = True  # Safety fail-safe: do not delete if DB status is indeterminate
+                finally:
+                    if own_db:
+                        active_db.close()
+
+            if not is_attached:
+                try:
+                    is_external = (photo_ref.startswith("http://") or photo_ref.startswith("https://")) and not ("amazonaws.com" in photo_ref or "s3." in photo_ref)
+                    if not is_external:
+                        key = photo_ref.split(".amazonaws.com/")[-1] if "amazonaws.com/" in photo_ref else photo_ref
+                        key = key.lstrip("/")
+                        storage_provider = get_storage_provider()
+                        await storage_provider.delete_image(key)
+                except Exception as del_err:
+                    logger.warning("Failed to delete staged storage object %s during draft cancellation: %s", photo_ref, del_err)
+
         msg = (
             "Your complaint draft has been discarded.\n\n"
             "Feel free to send a photograph anytime you notice a civic infrastructure issue."
@@ -912,11 +1348,12 @@ class WhatsAppService:
         self,
         sender_phone: str,
         text: str,
+        db: Optional[Session] = None,
     ) -> Dict[str, Any]:
         """
         Processes citizen natural conversational complaints:
         1. Classifies civic issue from text using keywords / Gemini heuristics.
-        2. Stashes conversational draft in PendingSessionStore.
+        2. Stashes conversational draft in PendingSessionStore (PostgreSQL-backed with in-memory fallback).
         3. Prompts citizen to share a photograph or GPS location.
         """
         clean_text = text.strip()
@@ -977,7 +1414,7 @@ class WhatsAppService:
             "sender_phone": sender_phone,
             "status": "awaiting_photo_or_confirmation",
         }
-        self.pending_sessions.store_draft(sender_phone, draft_data)
+        self.pending_sessions.store_draft(sender_phone, draft_data, db=db)
 
         prompt = (
             f"📝 *Civic Complaint Drafted*\n\n"
@@ -995,9 +1432,10 @@ class WhatsAppService:
         self,
         sender_phone: str,
         address_text: str,
+        db: Optional[Session] = None,
     ) -> bool:
         """Updates the address on an active complaint draft and prompts to submit."""
-        draft = self.pending_sessions.get_draft(sender_phone)
+        draft = self.pending_sessions.get_draft(sender_phone, db=db)
         if not draft:
             return False
 
@@ -1008,7 +1446,7 @@ class WhatsAppService:
             clean_addr = clean_addr[9:].strip()
 
         draft["address"] = clean_addr
-        self.pending_sessions.store_draft(sender_phone, draft)
+        self.pending_sessions.store_draft(sender_phone, draft, db=db)
 
         msg = (
             f"📍 *Location Address Updated*\n\n"
@@ -1025,9 +1463,10 @@ class WhatsAppService:
         lat: float,
         lng: float,
         address: Optional[str] = None,
+        db: Optional[Session] = None,
     ) -> bool:
         """Updates GPS coordinates and optional address on pending draft."""
-        draft = self.pending_sessions.get_draft(sender_phone)
+        draft = self.pending_sessions.get_draft(sender_phone, db=db)
         if not draft:
             return False
 
@@ -1036,7 +1475,7 @@ class WhatsAppService:
         if address:
             draft["address"] = address
 
-        self.pending_sessions.store_draft(sender_phone, draft)
+        self.pending_sessions.store_draft(sender_phone, draft, db=db)
 
         msg = (
             f"📍 *GPS Location Pin Received*\n\n"
@@ -1203,14 +1642,51 @@ class WhatsAppService:
             await self.send_text_message(sender_phone, f"❌ Complaint ID '{clean_id}' was not found.")
             return
 
-        safe_fn = f"evidence_{int(time.time())}_{uuid.uuid4().hex[:6]}.jpg"
-        upload_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
-        os.makedirs(upload_dir, exist_ok=True)
-        file_path = os.path.join(upload_dir, safe_fn)
-        with open(file_path, "wb") as f:
-            f.write(image_bytes)
+        # Validate file size limits
+        max_bytes = getattr(settings, "MAX_UPLOAD_SIZE_BYTES", 10485760)
+        if len(image_bytes) > max_bytes:
+            limit_mb = max(1, max_bytes // (1024 * 1024))
+            logger.warning("WhatsApp additional evidence from %s rejected: exceeds max upload size", sender_phone)
+            await self.send_text_message(
+                sender_phone,
+                f"❌ Photo exceeds maximum allowed size ({limit_mb} MB). Please compress and resend."
+            )
+            return
 
-        photo_url = f"/uploads/{safe_fn}"
+        # Validate MIME format using magic bytes
+        format_info = detect_image_format(image_bytes)
+        if not format_info:
+            logger.warning("WhatsApp additional evidence from %s rejected: unsupported format", sender_phone)
+            await self.send_text_message(
+                sender_phone,
+                "❌ Unsupported image format. Please send a genuine JPEG, PNG, or WEBP photo."
+            )
+            return
+
+        _, mime_type, safe_ext = format_info
+
+        # Persist photo using configured storage provider (Supabase S3 or Local)
+        storage_provider = get_storage_provider()
+        try:
+            stored = await storage_provider.store_image(
+                contents=image_bytes,
+                safe_ext=safe_ext,
+                mime_type=mime_type,
+                prefix="uploads"
+            )
+        except Exception as e:
+            logger.error("Storage upload failed for additional evidence on incident %s: %s", clean_id, e)
+            await self.send_text_message(
+                sender_phone,
+                f"❌ Failed to attach photo to `{clean_id}` due to a storage service error. Please try again."
+            )
+            return
+
+        stored_key = stored["filename"]
+        photo_url = stored_key if stored_key.startswith("uploads/") else f"/uploads/{stored_key}"
+
+        if not inc.photo_url or not inc.photo_url.strip():
+            inc.photo_url = photo_url
 
         audit = AuditLog(
             incident_id=inc.id,
@@ -1246,11 +1722,18 @@ class WhatsAppService:
     # ==========================================================================
 
     def get_user_role(self, db: Session, sender_phone: str) -> str:
-        """Returns role of sender: 'admin', 'commissioner', 'engineer', or 'citizen'."""
+        """
+        Returns role of sender: 'admin', 'commissioner', 'engineer', or 'citizen'.
+        Staff roles require an existing, active account in the database.
+        """
         clean_phone = self._clean_recipient(sender_phone)
         user_id = f"usr-wa-{clean_phone}"
-        user = db.query(User).filter(User.id == user_id).first()
-        if user and user.role:
+        user = db.query(User).filter(
+            User.id == user_id,
+            User.is_active == True,
+            User.status == "active"
+        ).first()
+        if user and user.role and user.role.lower() in ("engineer", "commissioner", "admin"):
             return user.role.lower()
         return "citizen"
 
@@ -1258,51 +1741,58 @@ class WhatsAppService:
         self,
         db: Session,
         sender_phone: str,
-        role: str,
-        passcode: str,
+        credential_first: str,
+        credential_second: Optional[str] = None,
     ) -> Tuple[bool, str]:
         """
-        Allows field engineers, commissioners, and admins to authenticate via WhatsApp.
-        Passcode: 'civic2026' or matching staff password.
+        Securely links an authorized municipal staff member's verified WhatsApp device
+        to an existing, active staff account in the database.
+
+        Strict Security Rules:
+        1. ZERO Password Transmission: Passwords are NEVER accepted or transmitted over WhatsApp.
+        2. Legacy passcodes (including 'civic2026') are completely denied.
+        3. Two-step verification using single-use 6-digit OTPs (valid for 5 minutes, max 3 attempts).
+        4. Generic denials to prevent account enumeration.
+        5. Preserves existing staff RBAC ('engineer', 'commissioner', 'admin') and incident ownership rules.
         """
         clean_phone = self._clean_recipient(sender_phone)
-        role = role.lower().strip()
-        if role not in ("engineer", "commissioner", "admin"):
-            return False, "Invalid role. Supported roles: engineer, commissioner, admin."
+        if not clean_phone:
+            return False, "⚠️ Access denied. Invalid device identifier."
 
-        valid_passcode = "civic2026"
-        if passcode.strip() != valid_passcode:
-            return False, "Invalid authentication passcode. Access denied."
+        arg1 = (credential_first or "").strip()
+        arg2 = (credential_second or "").strip()
 
-        user_id = f"usr-wa-{clean_phone}"
-        user = db.query(User).filter(User.id == user_id).first()
+        # 1. Reject any attempt to use obsolete or hardcoded passcodes
+        if "civic2026" in arg1.lower() or "civic2026" in arg2.lower():
+            return False, "⚠️ Access denied. Hardcoded passcodes have been decommissioned. Please authenticate via official staff OTP."
 
-        dept_map = {
-            "engineer": "Roads & Infrastructure Engineering",
-            "commissioner": "Executive Command & Municipal Administration",
-            "admin": "IT Operations & Infrastructure"
-        }
-
-        if not user:
-            user = User(
-                id=user_id,
-                email=f"{role}_{clean_phone}@civicsense.ai",
-                full_name=f"WhatsApp {role.title()} ({clean_phone[-4:]})",
-                hashed_password=get_password_hash(f"staff_auth_{uuid.uuid4().hex[:12]}"),
-                role=role,
-                department=dept_map.get(role, "Municipal Works"),
-                status="active",
-                is_active=True
+        # 2. Strict rejection of password transmission over WhatsApp
+        if credential_second:
+            logger.warning("Rejected password transmission attempt over WhatsApp from device ending in %s", clean_phone[-4:])
+            return False, (
+                "⚠️ Security Notice: Municipal security policy strictly forbids transmitting passwords over WhatsApp.\n\n"
+                "To link your official device, please use the secure OTP verification flow:\n"
+                "1. Type `staff link <email>` to generate a single-use verification code.\n"
+                "2. Reply `verify <code>` with your 6-digit code.\n\n"
+                "Passwords must NEVER be shared in chat."
             )
-            db.add(user)
-        else:
-            user.role = role
-            user.department = dept_map.get(role, user.department)
-            user.is_active = True
 
-        db.commit()
-        db.refresh(user)
-        return True, f"Successfully authenticated as {role.title()} ({user.department})."
+        # 3. Single-argument verification: If 6-digit numeric OTP, verify it
+        if re.match(r"^\d{6}$", arg1):
+            return self.otp_manager.verify_otp(db, clean_phone, arg1)
+
+        # 4. Single-argument initiation: If email address, request OTP
+        if "@" in arg1:
+            success, msg, _ = self.otp_manager.request_otp(db, clean_phone, arg1)
+            return success, msg
+
+        # 5. Usage guidance
+        return False, (
+            "⚠️ Invalid staff linking format. Official staff device registration uses secure OTPs:\n\n"
+            "• Request code: `staff link <official_email>`\n"
+            "• Verify code: `verify <6-digit-code>`\n\n"
+            "Passwords must never be transmitted in chat."
+        )
 
     # ==========================================================================
     # 12. FIELD ENGINEER WHATSAPP OPERATIONS
@@ -1361,14 +1851,17 @@ class WhatsAppService:
         """
         clean_phone = self._clean_recipient(sender_phone)
         user_id = f"usr-wa-{clean_phone}"
-        user = db.query(User).filter(User.id == user_id).first()
+        user = db.query(User).filter(
+            User.id == user_id,
+            User.is_active == True,
+            User.status == "active"
+        ).first()
 
         if not user or user.role not in ("engineer", "admin"):
             return (
                 False,
                 None,
-                "⚠️ Access denied. Field engineer operations require an authenticated engineer account. "
-                "Reply 'engineer login <passcode>' to authenticate."
+                "⚠️ Access denied. Field engineer operations require an authenticated engineer account linked to this device."
             )
 
         # Admin access follows explicit policy

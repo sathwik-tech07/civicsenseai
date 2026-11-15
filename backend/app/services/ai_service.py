@@ -18,8 +18,9 @@ try:
 except Exception as e:
     pass
 
-# Load env variables and configure Gemini
-load_dotenv()
+# Load local .env only in non-staging, non-production development environments
+if os.getenv("ENVIRONMENT", "development").lower() not in ("staging", "stage", "production", "prod"):
+    load_dotenv()
 
 def get_gemini_client(api_key_override: Optional[str] = None):
     """

@@ -1,0 +1,107 @@
+# ==============================================================================
+# CivicSense AI — Staging Infrastructure Blueprint (Render)
+# Architecture: Zero-Cost Staging Tier (₹0 / $0.00 per month)
+#   1. FastAPI Backend (Web Service) connected to Supabase Staging PostgreSQL (Tokyo)
+#   2. WhatsMeow Gateway (Web Service) with Supabase PostgreSQL Persistence (Tokyo)
+#
+# Free Cloud Hosting Operational Limitations:
+#   - Inactivity Sleep: Render Free spins down after 15 minutes of inbound HTTP inactivity.
+#   - WebSocket Severance: When spun down, outbound WhatsApp WebSocket disconnects.
+#   - Pre-Demo Protocol: Send a GET /healthz request 1 minute prior to demonstrations
+#     to wake the container and re-establish the WhatsApp connection.
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. CivicSense AI Staging Backend API (FastAPI)
+  # ----------------------------------------------------------------------------
+  - type: web
+    name: civicsense-backend-staging
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    plan: free # Zero-cost web service ($0/mo)
+    region: singapore # Closest Render region to Tokyo Supabase (ap-northeast-1)
+    envVars:
+      - key: ENVIRONMENT
+        value: staging
+      - key: PROJECT_NAME
+        value: CivicSense AI Staging Backend
+      - key: DATABASE_URL
+        sync: false # Set in Render Dashboard: postgresql://postgres.oayzaszhhpfjlpmaezmc:*****@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres?sslmode=require
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "10080"
+      - key: ENABLE_DEMO_ACCOUNTS
+        value: "false"
+      - key: STORAGE_PROVIDER
+        value: s3
+      - key: S3_BUCKET_NAME
+        value: civicsense-staging-evidence
+      - key: S3_REGION_NAME
+        value: ap-northeast-1
+      - key: S3_ENDPOINT_URL
+        value: https://oayzaszhhpfjlpmaezmc.supabase.co/storage/v1/s3
+      - key: S3_ACCESS_KEY_ID
+        sync: false # Set in Render Dashboard
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false # Set in Render Dashboard
+      - key: S3_PRESIGNED_EXPIRATION_SECONDS
+        value: "900"
+      - key: CORS_ORIGINS
+        value: https://civicsense-staging.vercel.app
+      - key: RATE_LIMIT_BACKEND
+        value: database
+      - key: TRUST_PROXY_HEADERS
+        value: "false"
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: VISION_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false # Set in Render Dashboard
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: WHATSAPP_PROVIDER
+        value: whatsmeow
+      - key: WHATSAPP_GATEWAY_URL
+        value: https://civicsense-wa-gateway-staging.onrender.com
+      - key: WHATSAPP_GATEWAY_SECRET
+        sync: false # Set in Render Dashboard (shared cryptographically secure secret)
+
+  # ----------------------------------------------------------------------------
+  # 2. WhatsMeow WhatsApp Gateway (Web Service)
+  # ZERO-COST POSTGRESQL PERSISTENCE ARCHITECTURE:
+  # Sessions and durable queues are persisted in Supabase PostgreSQL (schema 'whatsmeow').
+  # No paid persistent disk is required! ($0/mo Free Tier)
+  # ----------------------------------------------------------------------------
+  - type: web
+    name: civicsense-wa-gateway-staging
+    runtime: docker
+    rootDir: whatsapp-gateway
+    dockerfilePath: ./Dockerfile
+    plan: free # Zero-cost web service ($0/mo)
+    region: singapore
+    healthCheckPath: /healthz
+    envVars:
+      - key: PORT
+        value: "8085"
+      - key: ENVIRONMENT
+        value: staging
+      - key: DB_DIALECT
+        value: postgres
+      - key: DB_SCHEMA
+        value: whatsmeow
+      - key: WHATSAPP_GATEWAY_DATABASE_URL
+        sync: false # Set in Render Dashboard (Least-privilege whatsmeow_gateway role): postgresql://whatsmeow_gateway.oayzaszhhpfjlpmaezmc:*****@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres?sslmode=require&search_path=whatsmeow,public
+      - key: FASTAPI_BACKEND_URL
+        value: https://civicsense-backend-staging.onrender.com
+      - key: WHATSAPP_GATEWAY_SECRET
+        sync: false # Set in Render Dashboard (must match backend)
+      - key: LOG_LEVEL
+        value: INFO
