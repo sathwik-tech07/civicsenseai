@@ -1,0 +1,54 @@
+name: Verify WhatsApp Gateway Protocol Upgrade
+
+on:
+  push:
+    branches:
+      - 'ci/verify-**'
+      - 'verify/**'
+      - 'main'
+    paths:
+      - 'whatsapp-gateway/**'
+      - '.github/workflows/verify-gateway.yml'
+  pull_request:
+    paths:
+      - 'whatsapp-gateway/**'
+  workflow_dispatch:
+
+jobs:
+  verify-gateway:
+    name: Go 1.26 Linux Verification
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: whatsapp-gateway
+    env:
+      GOTOOLCHAIN: auto
+      CGO_ENABLED: '0'
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go (from whatsapp-gateway/go.mod)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'whatsapp-gateway/go.mod'
+          check-latest: true
+          cache-dependency-path: 'whatsapp-gateway/go.sum'
+
+      - name: Check Go Toolchain Environment
+        run: |
+          go version
+          go env
+
+      - name: Step 1 - Verify Go Modules
+        run: go mod verify
+
+      - name: Step 2 - Run Unit & Regression Tests
+        run: go test -v ./...
+
+      - name: Step 3 - Run Go Vet Static Analysis
+        run: go vet ./...
+
+      - name: Step 4 - Build Static Executable
+        run: go build -v ./...

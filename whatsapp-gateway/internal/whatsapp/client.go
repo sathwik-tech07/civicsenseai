@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow"
-	waProto "go.mau.fi/whatsmeow/binary/proto"
+	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -31,6 +31,9 @@ type ClientManager struct {
 	cancel       context.CancelFunc
 	ctx          context.Context
 
+	versionMu         sync.Mutex
+	refreshingVersion bool
+
 	onMessage func(msg *events.Message)
 	onReceipt func(receipt *events.Receipt)
 }
@@ -53,10 +56,47 @@ func (cm *ClientManager) SetMessageHandlers(onMsg func(*events.Message), onRecei
 	cm.onReceipt = onReceipt
 }
 
+// syncWAVersion fetches and synchronizes the WhatsApp Web version safely under versionMu.
+func (cm *ClientManager) syncWAVersion(ctx context.Context) error {
+	cm.versionMu.Lock()
+	defer cm.versionMu.Unlock()
+
+	initialVer := store.GetWAVersion()
+	latestVer, err := whatsmeow.GetLatestVersion(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to fetch latest WhatsApp Web version: %w", err)
+	}
+
+	if latestVer == nil || latestVer.IsZero() {
+		return fmt.Errorf("fetched WhatsApp Web version is empty or zero")
+	}
+
+	if *latestVer != initialVer {
+		logging.Infof("Updating WhatsApp Web version from %s to %s", initialVer.String(), latestVer.String())
+		store.SetWAVersion(*latestVer)
+		if store.DeviceProps.Version != nil {
+			store.DeviceProps.Version.Primary = proto.Uint32((*latestVer)[0])
+			store.DeviceProps.Version.Secondary = proto.Uint32((*latestVer)[1])
+			store.DeviceProps.Version.Tertiary = proto.Uint32((*latestVer)[2])
+		}
+	} else {
+		logging.Infof("WhatsApp Web version is already synchronized: %s", initialVer.String())
+	}
+	return nil
+}
+
 // Initialize creates the whatsmeow client and registers core event handlers.
 func (cm *ClientManager) Initialize() error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
+
+	// Dynamically fetch and sync latest WhatsApp Web version to prevent 405 Client Outdated errors
+	verCtx, verCancel := context.WithTimeout(context.Background(), 7*time.Second)
+	defer verCancel()
+
+	if err := cm.syncWAVersion(verCtx); err != nil {
+		logging.Warnf("Failed to dynamically fetch latest WhatsApp Web version: %v. Safely using built-in version: %s", err, store.GetWAVersion().String())
+	}
 
 	waLogger := waLog.Stdout("WhatsmeowClient", "INFO", true)
 	cm.client = whatsmeow.NewClient(cm.deviceStore, waLogger)
@@ -173,6 +213,33 @@ func (cm *ClientManager) handleEvent(evt interface{}) {
 		cm.mu.Unlock()
 		logging.Warnf("WhatsApp Web stream replaced by another session.")
 
+	case *events.ClientOutdated:
+		logging.Warnf("WhatsApp Web client outdated (405) event received. Attempting dynamic version refresh...")
+		go func() {
+			cm.mu.Lock()
+			if cm.refreshingVersion {
+				cm.mu.Unlock()
+				logging.Infof("Dynamic version refresh already in progress, skipping duplicate event")
+				return
+			}
+			cm.refreshingVersion = true
+			cm.mu.Unlock()
+
+			defer func() {
+				cm.mu.Lock()
+				cm.refreshingVersion = false
+				cm.mu.Unlock()
+			}()
+
+			refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 7*time.Second)
+			defer refreshCancel()
+			if err := cm.syncWAVersion(refreshCtx); err != nil {
+				logging.Warnf("Failed to dynamically refresh WhatsApp Web version: %v. Continuing with current version: %s", err, store.GetWAVersion().String())
+			} else {
+				logging.Infof("Successfully refreshed WhatsApp Web version to %s after 405 event", store.GetWAVersion().String())
+			}
+		}()
+
 	case *events.Message:
 		cm.mu.RLock()
 		handler := cm.onMessage
@@ -283,7 +350,7 @@ func (cm *ClientManager) Logout(ctx context.Context) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	if cm.client != nil {
-		err := cm.client.Logout()
+		err := cm.client.Logout(ctx)
 		cm.connected = false
 		cm.loggedIn = false
 		pairing.SetStatus(pairing.StatusIdle)
@@ -305,7 +372,7 @@ func (cm *ClientManager) SendTextMessage(ctx context.Context, recipientJID types
 		return "", fmt.Errorf("cannot send: client is not connected to WhatsApp")
 	}
 
-	msg := &waProto.Message{
+	msg := &waE2E.Message{
 		Conversation: proto.String(text),
 	}
 

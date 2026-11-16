@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"go.mau.fi/whatsmeow"
-	waProto "go.mau.fi/whatsmeow/binary/proto"
+	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 
@@ -69,7 +69,7 @@ func (ms *MessageSender) SendMessage(ctx context.Context, req *events.OutboundSe
 		if req.Text == nil || strings.TrimSpace(req.Text.Body) == "" {
 			return nil, fmt.Errorf("text message body cannot be empty")
 		}
-		msg := &waProto.Message{
+		msg := &waE2E.Message{
 			Conversation: proto.String(strings.TrimSpace(req.Text.Body)),
 		}
 		resp, err := client.SendMessage(ctx, jid, msg)
@@ -104,7 +104,7 @@ func (ms *MessageSender) SendMessage(ctx context.Context, req *events.OutboundSe
 			return nil, fmt.Errorf("failed to upload image to WhatsApp media CDN: %w", err)
 		}
 
-		imgMsg := &waProto.ImageMessage{
+		imgMsg := &waE2E.ImageMessage{
 			Caption:       proto.String(req.Image.Caption),
 			Mimetype:      proto.String(mime),
 			URL:           &uploadResp.URL,
@@ -115,7 +115,7 @@ func (ms *MessageSender) SendMessage(ctx context.Context, req *events.OutboundSe
 			FileLength:    proto.Uint64(uint64(len(imgBytes))),
 		}
 
-		msg := &waProto.Message{
+		msg := &waE2E.Message{
 			ImageMessage: imgMsg,
 		}
 

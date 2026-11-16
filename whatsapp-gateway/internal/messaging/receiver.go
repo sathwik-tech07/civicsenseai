@@ -136,7 +136,9 @@ func (mr *MessageReceiver) HandleIncomingMessage(evt *events.Message) {
 		// Download binary media via whatsmeow
 		client := mr.cm.RawClient()
 		if client != nil {
-			imgBytes, err := client.Download(imgMsg)
+			dlCtx, dlCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			imgBytes, err := client.Download(dlCtx, imgMsg)
+			dlCancel()
 			if err != nil {
 				logging.Errorf("Failed to download image media for msg %s: %v", msgID, err)
 			} else {

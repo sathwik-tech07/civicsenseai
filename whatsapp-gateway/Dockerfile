@@ -2,8 +2,9 @@
 # CivicSense AI — WhatsApp Gateway (Whatsmeow) Multi-Stage Dockerfile
 # ==============================================================================
 
-# Stage 1: Builder
-FROM golang:1.23-alpine AS builder
+# Stage 1: Builder (Go alpine with automatic toolchain switching enabled)
+FROM golang:alpine AS builder
+ENV GOTOOLCHAIN=auto
 
 WORKDIR /app
 

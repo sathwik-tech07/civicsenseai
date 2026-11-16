@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -52,7 +53,7 @@ func NewStoreManager(cfg *config.Config) (*StoreManager, error) {
 			return nil, fmt.Errorf("pre-flight schema safety check failed: %w", err)
 		}
 
-		container, err = sqlstore.New("postgres", cfg.DatabaseURL, waLogger)
+		container, err = sqlstore.New(context.Background(), "postgres", cfg.DatabaseURL, waLogger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open postgres session store: %w", err)
 		}
@@ -72,7 +73,7 @@ func NewStoreManager(cfg *config.Config) (*StoreManager, error) {
 		dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)", cfg.DBPath)
 		logging.Infof("Initializing whatsmeow SQLite session container at: %s", cfg.DBPath)
 
-		container, err = sqlstore.New("sqlite", dsn, waLogger)
+		container, err = sqlstore.New(context.Background(), "sqlite", dsn, waLogger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open sqlite session store: %w", err)
 		}
@@ -83,7 +84,7 @@ func NewStoreManager(cfg *config.Config) (*StoreManager, error) {
 	}
 
 	// Retrieve first device or create a new one
-	deviceStore, err := container.GetFirstDevice()
+	deviceStore, err := container.GetFirstDevice(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get device from store: %w", err)
 	}
