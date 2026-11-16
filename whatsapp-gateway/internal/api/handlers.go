@@ -53,6 +53,14 @@ func (h *APIHandler) Status(w http.ResponseWriter, r *http.Request) {
 // GetQR returns the current pairing QR code for the admin UI.
 func (h *APIHandler) GetQR(w http.ResponseWriter, r *http.Request) {
 	qr := pairing.GetQRState()
+
+	// If unpaired and QR pairing timed out or is idle, automatically kick off a new pairing cycle
+	if !h.cm.IsLoggedIn() && (qr.Status == pairing.StatusTimedOut || qr.Status == pairing.StatusIdle) {
+		go func() {
+			_ = h.cm.Start()
+		}()
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(qr)
