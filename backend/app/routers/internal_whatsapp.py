@@ -289,7 +289,10 @@ async def process_gateway_inbound_event(event: GatewayInboundEvent) -> None:
                 await whatsapp_service.update_draft_address(sender_phone, raw_text, db=db)
 
             # K. Greetings & Help
-            elif lower_text in ("hi", "hello", "hey", "start", "help", "menu", "namaste", "hi!") or lower_text.startswith("hi "):
+            elif lower_text in (
+                "hi", "hello", "hey", "start", "help", "menu", "namaste", "hi!",
+                "hlo", "helo", "halo", "hii", "hiii", "hy", "namaskar"
+            ) or lower_text.startswith("hi ") or lower_text.startswith("hello ") or lower_text.startswith("hlo "):
                 await whatsapp_service.send_text_message(sender_phone, WELCOME_MESSAGE)
 
             # L. Conversational Complaint Initiation (Civic problem keywords)
