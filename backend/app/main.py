@@ -23,12 +23,13 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Enable CORS for Production & Local Frontends
-has_wildcard = "*" in settings.CORS_ORIGINS
+# Enable CORS for Production, Staging Preview & Local Frontends
+# Wildcard origins are rejected before startup by validate_production_security, guaranteeing credentials remain enabled.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=not has_wildcard,
+    allow_origin_regex=settings.CORS_ORIGIN_REGEX,
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
     expose_headers=["*"],
