@@ -50,9 +50,9 @@ ENV LOG_LEVEL=INFO
 
 EXPOSE 8085
 
-# Kubernetes / Container health probe
+# Kubernetes / Container health probe (dynamically respects $PORT assigned by Render)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:8085/healthz || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-8085}/healthz || exit 1
 
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["/app/whatsapp-gateway"]

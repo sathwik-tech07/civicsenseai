@@ -19,6 +19,10 @@ import (
 	"civicsense/whatsapp-gateway/internal/pairing"
 )
 
+// Modern baseline WhatsApp Web version (active production revision as of Nov 2026).
+// Ensures the gateway never falls back to an ancient built-in version that causes HTTP 405 Client Outdated.
+var FallbackWAVersion = store.WAVersionContainer{2, 3000, 1054777660}
+
 // ClientManager coordinates the whatsmeow client and connection state.
 type ClientManager struct {
 	mu           sync.RWMutex
@@ -90,12 +94,21 @@ func (cm *ClientManager) Initialize() error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// Dynamically fetch and sync latest WhatsApp Web version to prevent 405 Client Outdated errors
+	// Pre-seed with verified modern WhatsApp Web version so the client never uses
+	// an ancient hardcoded library version that triggers HTTP 405 Client Outdated
+	store.SetWAVersion(FallbackWAVersion)
+	if store.DeviceProps.Version != nil {
+		store.DeviceProps.Version.Primary = proto.Uint32(FallbackWAVersion[0])
+		store.DeviceProps.Version.Secondary = proto.Uint32(FallbackWAVersion[1])
+		store.DeviceProps.Version.Tertiary = proto.Uint32(FallbackWAVersion[2])
+	}
+
+	// Dynamically fetch and sync latest WhatsApp Web version to stay up-to-date
 	verCtx, verCancel := context.WithTimeout(context.Background(), 7*time.Second)
 	defer verCancel()
 
 	if err := cm.syncWAVersion(verCtx); err != nil {
-		logging.Warnf("Failed to dynamically fetch latest WhatsApp Web version: %v. Safely using built-in version: %s", err, store.GetWAVersion().String())
+		logging.Warnf("Failed to dynamically fetch latest WhatsApp Web version: %v. Safely using verified modern baseline: %s", err, store.GetWAVersion().String())
 	}
 
 	waLogger := waLog.Stdout("WhatsmeowClient", "INFO", true)
@@ -123,6 +136,11 @@ func (cm *ClientManager) Start() error {
 	}
 
 	if client.Store.ID == nil {
+		// Clean up any stale socket connection before requesting QR channel
+		if client.IsConnected() {
+			client.Disconnect()
+		}
+
 		// Device not paired yet -> Start QR pairing channel
 		logging.Infof("No paired session found. Starting QR code pairing channel...")
 		qrChan, err := client.GetQRChannel(cm.ctx)
@@ -173,6 +191,21 @@ func (cm *ClientManager) listenQR(qrChan <-chan whatsmeow.QRChannelItem) {
 			case "timeout":
 				logging.Warnf("QR pairing timed out.")
 				pairing.SetStatus(pairing.StatusTimedOut)
+			case "err-client-outdated":
+				logging.Warnf("QR pairing received err-client-outdated. Refreshing WhatsApp version and retrying...")
+				pairing.SetStatus(pairing.StatusFailed)
+				go func() {
+					refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer refreshCancel()
+					if err := cm.syncWAVersion(refreshCtx); err != nil {
+						logging.Warnf("Dynamic version sync after 405 error failed: %v", err)
+					}
+					time.Sleep(2 * time.Second)
+					if err := cm.Start(); err != nil {
+						logging.Errorf("Failed to restart QR channel after version refresh: %v", err)
+					}
+				}()
+				return
 			default:
 				logging.Infof("QR event: %s", item.Event)
 			}
