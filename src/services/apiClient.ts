@@ -3,7 +3,7 @@ import type { Incident, IncidentStatus, IncidentSeverity, IncidentType, Workflow
 export const TOKEN_STORAGE_KEY = 'civicsense_jwt';
 
 const getApiBaseUrl = (): string => {
-  // 1. Explicit environment variable
+  // 1. Explicit environment variable takes highest precedence
   const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL;
   if (envUrl && typeof envUrl === 'string' && envUrl.trim()) {
     const cleanUrl = envUrl.trim().replace(/\/$/, '');
@@ -18,7 +18,22 @@ const getApiBaseUrl = (): string => {
     return 'http://127.0.0.1:8000/api/v1';
   }
 
-  // 3. Deployed builds require explicit VITE_API_URL or VITE_API_BASE_URL; automatic fallback to production is forbidden
+  // 3. Staging and Vercel Preview Deployments: Automatically route to isolated staging backend
+  // Ensures preview environments default safely to staging while maintaining 100% production isolation.
+  if (
+    typeof window !== 'undefined' &&
+    window.location.hostname.endsWith('vercel.app') &&
+    window.location.hostname !== 'civicsenseai-theta.vercel.app'
+  ) {
+    return 'https://civicsense-backend-staging.onrender.com/api/v1';
+  }
+
+  // 4. Production web frontend fallback
+  if (typeof window !== 'undefined' && window.location.hostname === 'civicsenseai-theta.vercel.app') {
+    return 'https://civicsense-ai-l9qp.onrender.com/api/v1';
+  }
+
+  // 5. Deployed builds on unrecognized hosts require explicit VITE_API_URL or VITE_API_BASE_URL
   throw new Error(
     'CRITICAL CONFIGURATION ERROR: VITE_API_URL or VITE_API_BASE_URL is required in deployed builds. Automatic fallback to production API has been removed.'
   );
