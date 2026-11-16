@@ -495,7 +495,10 @@ async def get_gateway_status(current_user: User = Depends(require_admin_or_commi
                 headers={"Authorization": f"Bearer {secret}"},
             )
             if resp.status_code == 200:
-                return resp.json()
+                data = resp.json()
+                if "uptime_seconds" in data and isinstance(data["uptime_seconds"], (float, int)):
+                    data["uptime_seconds"] = round(float(data["uptime_seconds"]), 1)
+                return data
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
     except httpx.RequestError as re:
         logger.warning("Could not reach WhatsApp Gateway at %s: %s", gateway_url, re)

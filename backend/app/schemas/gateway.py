@@ -115,7 +115,7 @@ class GatewayStatusResponse(BaseModel):
     connected: bool
     logged_in: bool
     jid: Optional[str] = None
-    uptime_seconds: int = 0
+    uptime_seconds: float = 0.0
     goroutines: int = 0
     memory_alloc_mb: float = 0.0
 
