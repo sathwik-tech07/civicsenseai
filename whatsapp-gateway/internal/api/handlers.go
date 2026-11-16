@@ -55,7 +55,7 @@ func (h *APIHandler) GetQR(w http.ResponseWriter, r *http.Request) {
 	qr := pairing.GetQRState()
 
 	// If unpaired and QR pairing timed out or is idle, automatically kick off a new pairing cycle
-	if !h.cm.IsLoggedIn() && (qr.Status == pairing.StatusTimedOut || qr.Status == pairing.StatusIdle) {
+	if h.cm != nil && !h.cm.IsLoggedIn() && (qr.Status == pairing.StatusTimedOut || qr.Status == pairing.StatusIdle) {
 		go func() {
 			_ = h.cm.Start()
 		}()
@@ -96,7 +96,9 @@ func (h *APIHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 
 // Disconnect breaks current websocket connection.
 func (h *APIHandler) Disconnect(w http.ResponseWriter, r *http.Request) {
-	h.cm.Disconnect()
+	if h.cm != nil {
+		h.cm.Disconnect()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "disconnected"})
@@ -105,10 +107,12 @@ func (h *APIHandler) Disconnect(w http.ResponseWriter, r *http.Request) {
 // Reconnect triggers reconnect loop or generates fresh pairing QR if unpaired.
 func (h *APIHandler) Reconnect(w http.ResponseWriter, r *http.Request) {
 	go func() {
-		if !h.cm.IsLoggedIn() {
-			_ = h.cm.ResetToFreshDevice()
+		if h.cm != nil {
+			if !h.cm.IsLoggedIn() {
+				_ = h.cm.ResetToFreshDevice()
+			}
+			_ = h.cm.Start()
 		}
-		_ = h.cm.Start()
 	}()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -117,7 +121,10 @@ func (h *APIHandler) Reconnect(w http.ResponseWriter, r *http.Request) {
 
 // Logout unlinks device from WhatsApp.
 func (h *APIHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	err := h.cm.Logout(r.Context())
+	var err error
+	if h.cm != nil {
+		err = h.cm.Logout(r.Context())
+	}
 	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
