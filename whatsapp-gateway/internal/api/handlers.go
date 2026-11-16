@@ -102,9 +102,12 @@ func (h *APIHandler) Disconnect(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "disconnected"})
 }
 
-// Reconnect triggers reconnect loop.
+// Reconnect triggers reconnect loop or generates fresh pairing QR if unpaired.
 func (h *APIHandler) Reconnect(w http.ResponseWriter, r *http.Request) {
 	go func() {
+		if !h.cm.IsLoggedIn() {
+			_ = h.cm.ResetToFreshDevice()
+		}
 		_ = h.cm.Start()
 	}()
 	w.Header().Set("Content-Type", "application/json")

@@ -48,7 +48,7 @@ func main() {
 	}()
 
 	// 3. Initialize WhatsApp ClientManager
-	cm := whatsapp.NewClientManager(storeMgr.DeviceStore, cfg)
+	cm := whatsapp.NewClientManager(storeMgr.Container, storeMgr.DeviceStore, cfg)
 	if err := cm.Initialize(); err != nil {
 		logging.Errorf("Failed to initialize WhatsApp client: %v", err)
 		os.Exit(1)

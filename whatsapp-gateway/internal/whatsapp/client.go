@@ -9,6 +9,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
+	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
@@ -28,6 +29,7 @@ type ClientManager struct {
 	mu           sync.RWMutex
 	client       *whatsmeow.Client
 	deviceStore  *store.Device
+	container    *sqlstore.Container
 	cfg          *config.Config
 	connected    bool
 	loggedIn     bool
@@ -42,9 +44,10 @@ type ClientManager struct {
 	onReceipt func(receipt *events.Receipt)
 }
 
-func NewClientManager(deviceStore *store.Device, cfg *config.Config) *ClientManager {
+func NewClientManager(container *sqlstore.Container, deviceStore *store.Device, cfg *config.Config) *ClientManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &ClientManager{
+		container:   container,
 		deviceStore: deviceStore,
 		cfg:         cfg,
 		ctx:         ctx,
@@ -238,7 +241,16 @@ func (cm *ClientManager) handleEvent(evt interface{}) {
 		cm.loggedIn = false
 		cm.mu.Unlock()
 		pairing.SetStatus(pairing.StatusIdle)
-		logging.Warnf("Device session logged out by user or server. Re-pairing required.")
+		logging.Warnf("Device session logged out by user or server. Resetting to fresh device and restarting QR pairing...")
+		go func() {
+			if err := cm.ResetToFreshDevice(); err != nil {
+				logging.Errorf("Failed to reset device after logout event: %v", err)
+			}
+			time.Sleep(1 * time.Second)
+			if err := cm.Start(); err != nil {
+				logging.Warnf("Failed to auto-restart QR channel after logout: %v", err)
+			}
+		}()
 
 	case *events.StreamReplaced:
 		cm.mu.Lock()
@@ -378,17 +390,58 @@ func (cm *ClientManager) Disconnect() {
 	}
 }
 
-// Logout revokes device pairing and clears session credentials.
-func (cm *ClientManager) Logout(ctx context.Context) error {
+// ResetToFreshDevice clears session credentials, acquires a clean device from the container,
+// and re-creates the whatsmeow client ready for a brand new QR pairing cycle.
+func (cm *ClientManager) ResetToFreshDevice() error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
+
 	if cm.client != nil {
-		err := cm.client.Logout(ctx)
-		cm.connected = false
-		cm.loggedIn = false
-		pairing.SetStatus(pairing.StatusIdle)
-		return err
+		cm.client.Disconnect()
 	}
+
+	cm.connected = false
+	cm.loggedIn = false
+	pairing.SetStatus(pairing.StatusIdle)
+
+	if cm.container != nil {
+		newDev := cm.container.NewDevice()
+		if newDev != nil {
+			cm.deviceStore = newDev
+			waLogger := waLog.Stdout("WhatsmeowClient", "INFO", true)
+			cm.client = whatsmeow.NewClient(cm.deviceStore, waLogger)
+			cm.client.AddEventHandler(cm.handleEvent)
+			logging.Infof("Created fresh unpaired device for new pairing session.")
+			return nil
+		}
+	} else if cm.deviceStore != nil {
+		cm.deviceStore.ID = nil
+	}
+	return nil
+}
+
+// Logout revokes device pairing, clears session credentials, and prepares a new QR pairing cycle.
+func (cm *ClientManager) Logout(ctx context.Context) error {
+	cm.mu.RLock()
+	client := cm.client
+	cm.mu.RUnlock()
+
+	if client != nil {
+		_ = client.Logout(ctx)
+	}
+
+	if err := cm.ResetToFreshDevice(); err != nil {
+		logging.Errorf("Error resetting to fresh device after logout: %v", err)
+	}
+
+	// Automatically kick off fresh QR pairing channel so a new QR is immediately ready
+	go func() {
+		time.Sleep(1 * time.Second)
+		if err := cm.Start(); err != nil {
+			logging.Warnf("Auto-start QR channel after logout: %v", err)
+		}
+	}()
+
 	return nil
 }
 
