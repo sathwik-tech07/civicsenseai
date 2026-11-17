@@ -153,15 +153,15 @@ func (mr *MessageReceiver) HandleIncomingMessage(evt *events.Message) {
 	} else if extText := msgContent.GetExtendedTextMessage(); extText != nil && extText.GetText() != "" {
 		inboundMsg.Type = "text"
 		inboundMsg.Text = &appEvents.TextMessage{Body: extText.GetText()}
-	} else if btnResp := msgContent.GetButtonsResponseMessage(); btnResp != nil && btnResp.GetSelectedButtonId() != "" {
+	} else if btnResp := msgContent.GetButtonsResponseMessage(); btnResp != nil && btnResp.GetSelectedButtonID() != "" {
 		inboundMsg.Type = "text"
-		inboundMsg.Text = &appEvents.TextMessage{Body: btnResp.GetSelectedButtonId()}
-	} else if listResp := msgContent.GetListResponseMessage(); listResp != nil && listResp.GetSingleSelectReply() != nil && listResp.GetSingleSelectReply().GetSelectedRowId() != "" {
+		inboundMsg.Text = &appEvents.TextMessage{Body: btnResp.GetSelectedButtonID()}
+	} else if listResp := msgContent.GetListResponseMessage(); listResp != nil && listResp.GetSingleSelectReply() != nil && listResp.GetSingleSelectReply().GetSelectedRowID() != "" {
 		inboundMsg.Type = "text"
-		inboundMsg.Text = &appEvents.TextMessage{Body: listResp.GetSingleSelectReply().GetSelectedRowId()}
-	} else if templResp := msgContent.GetTemplateButtonReplyMessage(); templResp != nil && templResp.GetSelectedId() != "" {
+		inboundMsg.Text = &appEvents.TextMessage{Body: listResp.GetSingleSelectReply().GetSelectedRowID()}
+	} else if templResp := msgContent.GetTemplateButtonReplyMessage(); templResp != nil && templResp.GetSelectedID() != "" {
 		inboundMsg.Type = "text"
-		inboundMsg.Text = &appEvents.TextMessage{Body: templResp.GetSelectedId()}
+		inboundMsg.Text = &appEvents.TextMessage{Body: templResp.GetSelectedID()}
 	}
 
 	// 2. Image message
