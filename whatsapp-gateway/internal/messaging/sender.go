@@ -45,8 +45,13 @@ func CleanRecipient(recipient string) (types.JID, error) {
 
 	// Extract digits
 	digits := digitsOnlyRegex.ReplaceAllString(recipient, "")
-	if len(digits) < 7 || len(digits) > 15 {
-		return types.EmptyJID, fmt.Errorf("invalid recipient phone '%s': expected 7-15 digits", recipient)
+	if len(digits) < 7 || len(digits) > 25 {
+		return types.EmptyJID, fmt.Errorf("invalid recipient phone '%s': expected 7-25 digits", recipient)
+	}
+
+	// WhatsApp LIDs are typically 16-20 digits
+	if len(digits) > 15 {
+		return types.NewJID(digits, types.HiddenUserServer), nil
 	}
 
 	return types.NewJID(digits, types.DefaultUserServer), nil

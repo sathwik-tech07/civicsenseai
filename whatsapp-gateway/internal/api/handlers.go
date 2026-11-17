@@ -54,9 +54,12 @@ func (h *APIHandler) Status(w http.ResponseWriter, r *http.Request) {
 func (h *APIHandler) GetQR(w http.ResponseWriter, r *http.Request) {
 	qr := pairing.GetQRState()
 
-	// If unpaired and QR pairing timed out or is idle, automatically kick off a new pairing cycle
+	// If unpaired and QR pairing timed out or is idle, atomically transition to connecting
+	// and automatically kick off a new pairing cycle without spamming goroutines on polling
 	if h.cm != nil && !h.cm.IsLoggedIn() && (qr.Status == pairing.StatusTimedOut || qr.Status == pairing.StatusIdle) {
+		pairing.SetStatus(pairing.StatusConnecting)
 		go func() {
+			_ = h.cm.ResetToFreshDevice()
 			_ = h.cm.Start()
 		}()
 	}

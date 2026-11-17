@@ -13,6 +13,7 @@ func TestCleanRecipient(t *testing.T) {
 		{input: "+91 98765-43210", expected: "919876543210", hasError: false},
 		{input: "919876543210@s.whatsapp.net", expected: "919876543210", hasError: false},
 		{input: "1234567890", expected: "1234567890", hasError: false},
+		{input: "1234567890123456", expected: "1234567890123456", hasError: false}, // WhatsApp LID
 		{input: "123", expected: "", hasError: true},        // too short
 		{input: "", expected: "", hasError: true},           // empty
 		{input: "invalid-number", expected: "", hasError: true}, // non digits

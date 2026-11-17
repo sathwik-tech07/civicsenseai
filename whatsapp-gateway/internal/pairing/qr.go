@@ -11,11 +11,12 @@ import (
 type PairStatus string
 
 const (
-	StatusIdle     PairStatus = "idle"
-	StatusQRReady  PairStatus = "qr_ready"
-	StatusPaired   PairStatus = "paired"
-	StatusTimedOut PairStatus = "timeout"
-	StatusFailed   PairStatus = "failed"
+	StatusIdle       PairStatus = "idle"
+	StatusConnecting PairStatus = "connecting"
+	StatusQRReady    PairStatus = "qr_ready"
+	StatusPaired     PairStatus = "paired"
+	StatusTimedOut   PairStatus = "timeout"
+	StatusFailed     PairStatus = "failed"
 )
 
 // QRState tracks the latest pairing QR code and state.

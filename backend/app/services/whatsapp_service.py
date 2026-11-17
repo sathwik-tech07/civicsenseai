@@ -564,9 +564,9 @@ class WhatsAppService:
             raise WhatsAppInvalidRecipientError("Recipient phone number must be a non-empty string.")
 
         cleaned = re.sub(r"[^\d]", "", recipient)
-        if len(cleaned) < 7 or len(cleaned) > 15:
+        if len(cleaned) < 7 or len(cleaned) > 25:
             raise WhatsAppInvalidRecipientError(
-                f"Invalid phone number '{recipient}'. Expected 7-15 digits E.164 format."
+                f"Invalid phone number or LID '{recipient}'. Expected 7-25 digits."
             )
         return cleaned
 

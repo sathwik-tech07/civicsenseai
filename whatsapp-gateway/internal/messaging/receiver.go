@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 
 	appEvents "civicsense/whatsapp-gateway/internal/events"
@@ -98,7 +99,20 @@ func (mr *MessageReceiver) HandleIncomingMessage(evt *events.Message) {
 		return
 	}
 
-	senderPhone := evt.Info.Sender.User // digits only, e.g. 919876543210
+	// Robust sender phone extraction:
+	// Prioritize phone number from SenderAlt (used when Sender is LID), then Sender, then Chat
+	var senderPhone string
+	if !evt.Info.SenderAlt.IsEmpty() && evt.Info.SenderAlt.Server == types.DefaultUserServer && evt.Info.SenderAlt.User != "" {
+		senderPhone = evt.Info.SenderAlt.User
+	} else if evt.Info.Sender.Server == types.DefaultUserServer && evt.Info.Sender.User != "" {
+		senderPhone = evt.Info.Sender.User
+	} else if evt.Info.Chat.Server == types.DefaultUserServer && evt.Info.Chat.User != "" {
+		senderPhone = evt.Info.Chat.User
+	} else if evt.Info.Sender.User != "" {
+		senderPhone = evt.Info.Sender.User
+	} else if evt.Info.Chat.User != "" {
+		senderPhone = evt.Info.Chat.User
+	}
 	senderName := evt.Info.PushName
 	ts := evt.Info.Timestamp.Unix()
 

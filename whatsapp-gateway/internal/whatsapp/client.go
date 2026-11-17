@@ -240,7 +240,7 @@ func (cm *ClientManager) handleEvent(evt interface{}) {
 		cm.connected = false
 		cm.loggedIn = false
 		cm.mu.Unlock()
-		pairing.SetStatus(pairing.StatusIdle)
+		pairing.SetStatus(pairing.StatusConnecting)
 		logging.Warnf("Device session logged out by user or server. Resetting to fresh device and restarting QR pairing...")
 		go func() {
 			if err := cm.ResetToFreshDevice(); err != nil {
@@ -249,6 +249,7 @@ func (cm *ClientManager) handleEvent(evt interface{}) {
 			time.Sleep(1 * time.Second)
 			if err := cm.Start(); err != nil {
 				logging.Warnf("Failed to auto-restart QR channel after logout: %v", err)
+				pairing.SetStatus(pairing.StatusFailed)
 			}
 		}()
 
@@ -430,6 +431,7 @@ func (cm *ClientManager) Logout(ctx context.Context) error {
 		_ = client.Logout(ctx)
 	}
 
+	pairing.SetStatus(pairing.StatusConnecting)
 	if err := cm.ResetToFreshDevice(); err != nil {
 		logging.Errorf("Error resetting to fresh device after logout: %v", err)
 	}
@@ -439,6 +441,7 @@ func (cm *ClientManager) Logout(ctx context.Context) error {
 		time.Sleep(1 * time.Second)
 		if err := cm.Start(); err != nil {
 			logging.Warnf("Auto-start QR channel after logout: %v", err)
+			pairing.SetStatus(pairing.StatusFailed)
 		}
 	}()
 

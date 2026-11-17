@@ -30,6 +30,7 @@ from app.schemas.gateway import (
     GatewayQRResponse,
     GatewayOutboundRequest,
     GatewayOutboundResponse,
+    AdminTestSendMessageRequest,
 )
 from app.services.whatsapp_service import (
     whatsapp_service,
@@ -442,6 +443,7 @@ async def process_gateway_inbound_event(event: GatewayInboundEvent) -> None:
 # ==============================================================================
 
 @router.post("/internal/whatsapp/events", status_code=status.HTTP_200_OK)
+@router.post("/api/v1/internal/whatsapp/events", status_code=status.HTTP_200_OK)
 async def receive_gateway_event(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -612,3 +614,35 @@ async def get_gateway_queue_status(current_user: User = Depends(require_admin_or
             "stats": {"pending_count": 0, "failed_count": 0, "acknowledged_count": 0},
             "recent_failures": [],
         }
+
+
+@router.post("/api/v1/admin/whatsapp/test-send")
+async def admin_test_send_whatsapp_message(
+    payload: AdminTestSendMessageRequest,
+    current_user: User = Depends(require_admin_or_commissioner),
+):
+    """
+    Sends an outbound test message via the active WhatsApp Gateway or Meta provider.
+    Restricted to authenticated Administrator and Commissioner roles.
+    """
+    target = payload.recipient.strip()
+    msg_body = payload.message.strip()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Recipient cannot be empty.")
+    if not msg_body:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message body cannot be empty.")
+
+    try:
+        msg_id = await whatsapp_service.send_text_message(recipient=target, text=msg_body)
+        return {
+            "status": "sent",
+            "message_id": msg_id,
+            "recipient": target,
+            "provider": getattr(settings, "WHATSAPP_PROVIDER", "whatsmeow"),
+        }
+    except Exception as exc:
+        logger.error("Admin test dispatch to %s failed: %s", target, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Outbound dispatch failed: {exc}",
+        )

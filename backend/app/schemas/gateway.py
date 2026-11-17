@@ -131,3 +131,10 @@ class GatewayQRResponse(BaseModel):
     expires_at: Optional[str] = None
 
     model_config = ConfigDict(extra="allow")
+
+
+class AdminTestSendMessageRequest(BaseModel):
+    """Payload for administrative test WhatsApp dispatch."""
+    recipient: str = Field(..., description="Target phone number or JID")
+    message: str = Field("Hello from CivicSense AI Smart City Platform!", description="Message text")
+    model_config = ConfigDict(extra="allow")

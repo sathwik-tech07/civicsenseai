@@ -76,6 +76,7 @@ func Load() *Config {
 	} else if fastAPIURL == "" {
 		fastAPIURL = "http://localhost:8000"
 	}
+	fastAPIURL = strings.TrimRight(strings.TrimSpace(fastAPIURL), "/")
 
 	logLevel := os.Getenv("LOG_LEVEL")
 	if logLevel == "" {

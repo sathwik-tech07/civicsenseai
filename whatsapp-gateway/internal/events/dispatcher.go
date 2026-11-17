@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"civicsense/whatsapp-gateway/internal/logging"
@@ -22,7 +23,7 @@ type Dispatcher struct {
 
 func NewDispatcher(fastAPIURL, secret string) *Dispatcher {
 	return &Dispatcher{
-		fastAPIURL: fastAPIURL,
+		fastAPIURL: strings.TrimRight(strings.TrimSpace(fastAPIURL), "/"),
 		secret:     secret,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
