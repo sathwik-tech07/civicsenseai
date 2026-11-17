@@ -153,7 +153,10 @@ class Settings(BaseModel):
         "WHATSAPP_WHITELIST_ENABLED",
         "false" if ("pytest" in sys.modules or "PYTEST_CURRENT_TEST" in os.environ or os.getenv("ENVIRONMENT", "").lower() in ("test", "testing")) else "true"
     ).lower() in ("true", "1", "yes")
-    WHATSAPP_ALLOWED_NUMBERS: str = os.getenv("WHATSAPP_ALLOWED_NUMBERS", "919573161396,917838447570")
+    WHATSAPP_ALLOWED_NUMBERS: str = os.getenv(
+        "WHATSAPP_ALLOWED_NUMBERS",
+        "919573161396,917838447570,919963999368,919963999396"
+    )
 
     # Staging Isolation Guard
     STAGING_DATABASE_ONLY: bool = os.getenv("STAGING_DATABASE_ONLY", "false").lower() in ("true", "1", "yes")
