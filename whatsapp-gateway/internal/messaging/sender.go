@@ -69,6 +69,8 @@ func (ms *MessageSender) SendMessage(ctx context.Context, req *events.OutboundSe
 		return nil, fmt.Errorf("whatsapp client is disconnected")
 	}
 
+	logging.Infof("Dispatching outbound %s message to %s (raw recipient='%s')", req.Type, jid.String(), req.Recipient)
+
 	switch strings.ToLower(req.Type) {
 	case "text":
 		if req.Text == nil || strings.TrimSpace(req.Text.Body) == "" {
@@ -79,6 +81,7 @@ func (ms *MessageSender) SendMessage(ctx context.Context, req *events.OutboundSe
 		}
 		resp, err := client.SendMessage(ctx, jid, msg)
 		if err != nil {
+			logging.Errorf("Failed to send WhatsApp text message to %s: %v", jid.String(), err)
 			return nil, fmt.Errorf("failed to send text message: %w", err)
 		}
 		logging.Infof("Outbound text message sent to %s (msg_id=%s)", jid.String(), resp.ID)

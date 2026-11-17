@@ -539,29 +539,41 @@ class WhatsAppService:
             "Content-Type": "application/json",
         }
 
+        logger.info("[WHATSAPP_OUTBOUND_DISPATCH] Dispatching %s to recipient=%s via %s", message_type, recipient, endpoint)
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=45.0) as client:
                 resp = await client.post(endpoint, json=payload, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
                 msg_id = data.get("message_id") or f"wam_{int(time.time())}"
-                logger.info("Outbound message successfully dispatched via WhatsApp Gateway to %s (id=%s)", recipient, msg_id)
+                logger.info("[WHATSAPP_OUTBOUND_DISPATCH] Successfully sent to %s (id=%s)", recipient, msg_id)
                 return msg_id
         except httpx.HTTPStatusError as hse:
             logger.error("WhatsApp Gateway returned error HTTP %d for recipient %s: %s", hse.response.status_code, recipient, hse.response.text)
             raise WhatsAppAPIError(f"WhatsApp Gateway dispatch failed: {hse.response.text}", status_code=hse.response.status_code)
         except Exception as e:
-            logger.error("Failed to connect to WhatsApp Gateway at %s: %s", endpoint, e)
+            logger.error("Failed to connect to WhatsApp Gateway at %s for recipient %s: %s", endpoint, recipient, e)
             raise WhatsAppNetworkError(f"Failed to communicate with WhatsApp Gateway: {e}")
 
     @staticmethod
     def _clean_recipient(recipient: str) -> str:
         """
-        Cleans and validates citizen phone number (E.164 without leading plus).
+        Cleans and validates citizen phone number (E.164 without leading plus) or JID.
         Example: '+91 98765-43210' -> '919876543210'
+        Example: '103487349182374921@lid' -> '103487349182374921@lid'
         """
         if not recipient or not isinstance(recipient, str):
             raise WhatsAppInvalidRecipientError("Recipient phone number must be a non-empty string.")
+
+        recipient = recipient.strip()
+        if "@" in recipient:
+            user_part, domain_part = recipient.split("@", 1)
+            digits = re.sub(r"[^\d]", "", user_part)
+            if len(digits) < 7 or len(digits) > 25:
+                raise WhatsAppInvalidRecipientError(
+                    f"Invalid recipient JID '{recipient}'. Expected 7-25 digits."
+                )
+            return f"{digits}@{domain_part}"
 
         cleaned = re.sub(r"[^\d]", "", recipient)
         if len(cleaned) < 7 or len(cleaned) > 25:

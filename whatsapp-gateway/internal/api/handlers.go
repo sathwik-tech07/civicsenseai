@@ -1,11 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"civicsense/whatsapp-gateway/internal/events"
 	"civicsense/whatsapp-gateway/internal/health"
+	"civicsense/whatsapp-gateway/internal/logging"
 	"civicsense/whatsapp-gateway/internal/messaging"
 	"civicsense/whatsapp-gateway/internal/pairing"
 	"civicsense/whatsapp-gateway/internal/queue"
@@ -84,8 +87,13 @@ func (h *APIHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.sender.SendMessage(r.Context(), &req)
+	// Dedicated 60s timeout context ensures client HTTP disconnects do not cancel in-flight WhatsApp crypto/sends
+	sendCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	resp, err := h.sender.SendMessage(sendCtx, &req)
 	if err != nil {
+		logging.Errorf("Outbound dispatch to %s failed: %v", req.Recipient, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})

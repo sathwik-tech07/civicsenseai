@@ -129,13 +129,39 @@ func (mr *MessageReceiver) HandleIncomingMessage(evt *events.Message) {
 		return
 	}
 
-	// 1. Text message
+	// Unwrap nested message wrappers (ephemeral, view-once, edited, document caption)
+	for {
+		if eph := msgContent.GetEphemeralMessage(); eph != nil && eph.GetMessage() != nil {
+			msgContent = eph.GetMessage()
+		} else if vo := msgContent.GetViewOnceMessage(); vo != nil && vo.GetMessage() != nil {
+			msgContent = vo.GetMessage()
+		} else if vo2 := msgContent.GetViewOnceMessageV2(); vo2 != nil && vo2.GetMessage() != nil {
+			msgContent = vo2.GetMessage()
+		} else if doc := msgContent.GetDocumentWithCaptionMessage(); doc != nil && doc.GetMessage() != nil {
+			msgContent = doc.GetMessage()
+		} else if edited := msgContent.GetEditedMessage(); edited != nil && edited.GetMessage() != nil {
+			msgContent = edited.GetMessage()
+		} else {
+			break
+		}
+	}
+
+	// 1. Text message (direct conversation, extended text, or button/interactive response)
 	if text := msgContent.GetConversation(); text != "" {
 		inboundMsg.Type = "text"
 		inboundMsg.Text = &appEvents.TextMessage{Body: text}
 	} else if extText := msgContent.GetExtendedTextMessage(); extText != nil && extText.GetText() != "" {
 		inboundMsg.Type = "text"
 		inboundMsg.Text = &appEvents.TextMessage{Body: extText.GetText()}
+	} else if btnResp := msgContent.GetButtonsResponseMessage(); btnResp != nil && btnResp.GetSelectedButtonId() != "" {
+		inboundMsg.Type = "text"
+		inboundMsg.Text = &appEvents.TextMessage{Body: btnResp.GetSelectedButtonId()}
+	} else if listResp := msgContent.GetListResponseMessage(); listResp != nil && listResp.GetSingleSelectReply() != nil && listResp.GetSingleSelectReply().GetSelectedRowId() != "" {
+		inboundMsg.Type = "text"
+		inboundMsg.Text = &appEvents.TextMessage{Body: listResp.GetSingleSelectReply().GetSelectedRowId()}
+	} else if templResp := msgContent.GetTemplateButtonReplyMessage(); templResp != nil && templResp.GetSelectedId() != "" {
+		inboundMsg.Type = "text"
+		inboundMsg.Text = &appEvents.TextMessage{Body: templResp.GetSelectedId()}
 	}
 
 	// 2. Image message
@@ -186,7 +212,15 @@ func (mr *MessageReceiver) HandleIncomingMessage(evt *events.Message) {
 		},
 	}
 
-	logging.Infof("Received WhatsApp message from %s (%s): type=%s, id=%s", senderPhone, senderName, inboundMsg.Type, msgID)
+	hasText := inboundMsg.Text != nil && inboundMsg.Text.Body != ""
+	textPreview := ""
+	if hasText {
+		textPreview = inboundMsg.Text.Body
+		if len(textPreview) > 30 {
+			textPreview = textPreview[:30] + "..."
+		}
+	}
+	logging.Infof("Received WhatsApp message from %s (%s): type=%s, id=%s, has_text=%v, preview='%s'", senderPhone, senderName, inboundMsg.Type, msgID, hasText, textPreview)
 
 	// Durably persist event in SQLite before dispatch
 	if mr.queueStore != nil {

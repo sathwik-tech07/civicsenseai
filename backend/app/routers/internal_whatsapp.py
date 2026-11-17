@@ -137,7 +137,16 @@ async def process_gateway_inbound_event(event: GatewayInboundEvent) -> None:
 
     sender_phone = msg.from_
     if not sender_phone:
+        logger.warning("[WHATSAPP_INBOUND] Dropping message without sender_phone: msg_id=%s", msg_id)
         return
+
+    logger.info(
+        "[WHATSAPP_INBOUND] Received event msg_id=%s from=%s type=%s sender_name='%s'",
+        msg_id,
+        sender_phone,
+        msg.type,
+        msg.sender_name or "",
+    )
 
     db = SessionLocal()
     try:
@@ -145,6 +154,7 @@ async def process_gateway_inbound_event(event: GatewayInboundEvent) -> None:
         if msg.type == "text" and msg.text:
             raw_text = msg.text.body.strip()
             lower_text = raw_text.lower()
+            logger.info("[WHATSAPP_INBOUND_TEXT] from=%s raw_text='%s'", sender_phone, raw_text)
             user_role = whatsapp_service.get_user_role(db, sender_phone)
 
             # A. Staff Device Authentication & Secure OTP Linking
@@ -294,6 +304,7 @@ async def process_gateway_inbound_event(event: GatewayInboundEvent) -> None:
                 "hi", "hello", "hey", "start", "help", "menu", "namaste", "hi!",
                 "hlo", "helo", "halo", "hii", "hiii", "hy", "namaskar"
             ) or lower_text.startswith("hi ") or lower_text.startswith("hello ") or lower_text.startswith("hlo "):
+                logger.info("[WHATSAPP_ROUTING] Greeting detected from %s ('%s'), dispatching WELCOME_MESSAGE", sender_phone, raw_text)
                 await whatsapp_service.send_text_message(sender_phone, WELCOME_MESSAGE)
 
             # L. Conversational Complaint Initiation (Civic problem keywords)
@@ -302,10 +313,12 @@ async def process_gateway_inbound_event(event: GatewayInboundEvent) -> None:
                 "streetlight", "light pole", "drain", "drainage", "sewer", "sinkhole", "road damage",
                 "broken road", "water pipe", "flooding", "manhole"
             )):
+                logger.info("[WHATSAPP_ROUTING] Civic keyword detected from %s ('%s'), starting text draft", sender_phone, raw_text)
                 await whatsapp_service.handle_conversational_text_draft(sender_phone, raw_text, db=db)
 
             # M. General Conversational Civic Assistance via Gemini 2.5 Flash
             else:
+                logger.info("[WHATSAPP_ROUTING] Invoking conversational assistant for %s ('%s')", sender_phone, raw_text)
                 reply = await whatsapp_service.generate_conversational_reply(sender_phone, raw_text)
                 await whatsapp_service.send_text_message(sender_phone, reply)
 
@@ -427,6 +440,7 @@ async def process_gateway_inbound_event(event: GatewayInboundEvent) -> None:
                 )
 
         else:
+            logger.info("[WHATSAPP_FALLBACK] Non-text/non-photo message type='%s' from=%s, dispatching format guidance", msg.type, sender_phone)
             await whatsapp_service.send_text_message(
                 sender_phone,
                 "Currently, CivicSense AI accepts photographs, text commands, and location coordinates. Reply 'Hi' to start.",
