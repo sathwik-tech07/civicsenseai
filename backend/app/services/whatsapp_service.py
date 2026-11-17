@@ -897,16 +897,17 @@ class WhatsAppService:
         self,
         image_bytes: bytes,
         filename: str = "whatsapp_report.jpg",
+        caption: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Passes downloaded WhatsApp image bytes directly to the existing
-        AIService.analyze_image_vision multimodal pipeline.
+        AIService.analyze_image_vision multimodal pipeline with optional caption context.
         Preserves all Gemini 2.5 Flash validation without modification.
         """
         if not image_bytes or not isinstance(image_bytes, bytes):
             raise ValueError("image_bytes must be non-empty bytes.")
 
-        return await AIService.analyze_image_vision(image_bytes=image_bytes, filename=filename)
+        return await AIService.analyze_image_vision(image_bytes=image_bytes, filename=filename, caption=caption)
 
     # ==========================================================================
     # 5. IMAGE-BASED REPORTING & CITIZEN CONFIRMATION WORKFLOW
@@ -973,7 +974,7 @@ class WhatsAppService:
 
         # Analyze using Gemini 2.5 Flash Multimodal Vision
         try:
-            analysis = await self.analyze_whatsapp_image(image_bytes=image_bytes, filename=safe_fn)
+            analysis = await self.analyze_whatsapp_image(image_bytes=image_bytes, filename=safe_fn, caption=caption)
         except Exception as e:
             logger.warning("Gemini Vision analysis note: %s. Using standard baseline classification.", e)
             analysis = {
@@ -986,13 +987,37 @@ class WhatsAppService:
                 "estimated_repair_cost": 45000.0,
                 "saved_early_intervention": 180000.0,
                 "priorityScore": 85,
-                "department": "Road Infrastructure & Works Dept"
+                "department": "Road Infrastructure & Works Dept",
+                "recommended_department": "Road Infrastructure & Works Dept",
+                "is_civic_defect": True,
             }
+
+        # Check for non-civic image rejection
+        if analysis.get("is_civic_defect") is False:
+            logger.info("Non-civic image received from %s; prompting citizen for valid defect photo", sender_phone)
+            try:
+                storage_provider = get_storage_provider()
+                await storage_provider.delete_image(stored_key)
+            except Exception:
+                pass
+
+            non_civic_msg = (
+                "📸 *Photo Received — No Municipal Defect Detected*\n\n"
+                "Our AI inspected your photograph, but could not detect an infrastructure defect "
+                "(such as a pothole, road surface damage, garbage pile, water pipe burst, or broken streetlight).\n\n"
+                "💡 *How to Report:*\n"
+                "Please send a clear photo showing the civic defect on the street, sidewalk, or public area so municipal crews can inspect and resolve it."
+            )
+            await self.send_text_message(sender_phone, non_civic_msg)
+            return {"error": "Non-civic defect image", "is_civic_defect": False}
 
         cat = analysis.get("category", "Road Damage")
         sev = analysis.get("severity", "high")
         cost = float(analysis.get("estimated_repair_cost", 45000.0))
         conf = float(analysis.get("confidence", 92.5))
+        dept = analysis.get("recommended_department") or analysis.get("department", "Road Infrastructure & Works Dept")
+        repair_time = analysis.get("estimated_repair_time", "24-48 Hours")
+        safety_risk = analysis.get("public_safety_risk") or "Presents hazard to vehicular traffic and pedestrians."
         summary = analysis.get("description") or analysis.get("explanation") or f"{cat} defect reported by citizen."
 
         # Map to valid incident types
@@ -1012,6 +1037,11 @@ class WhatsAppService:
         # Stash draft in pending session store
         existing = self.pending_sessions.get_draft(sender_phone, db=db)
         effective_address = (existing and existing.get("address")) or "Victoria Road Corridor (Reported via WhatsApp)"
+        if caption:
+            match_addr = re.search(r"(?:near|at|on|in|opposite|behind|beside)\s+([A-Za-z0-9\s,\.\-]+)", caption, re.IGNORECASE)
+            if match_addr:
+                effective_address = match_addr.group(0).strip().title()
+
         effective_lat = (existing and existing.get("lat")) or 12.9716
         effective_lng = (existing and existing.get("lng")) or 77.5946
         user_desc = existing and existing.get("user_description")
@@ -1033,19 +1063,24 @@ class WhatsAppService:
             "confidence": conf,
             "description": effective_desc,
             "explanation": analysis.get("explanation", "Analyzed via Gemini 2.5 Flash Vision."),
-            "recommended_department": analysis.get("department", "Road Infrastructure & Works Dept"),
+            "recommended_department": dept,
             "sender_phone": sender_phone,
             "analysis_raw": analysis
         }
         self.pending_sessions.store_draft(sender_phone, draft_data, db=db)
 
-        # Build interactive confirmation message
+        # Build rich interactive confirmation message
         body_text = (
             f"🔍 *CivicSense AI Vision Analysis Complete*\n\n"
-            f"• *Issue:* {cat} ({sev.title()} Severity)\n"
-            f"• *AI Confidence:* {conf:.1f}%\n"
-            f"• *Estimated Repair:* ₹{cost:,.0f}\n"
-            f"• *Ward:* Ward 1 - Metro Health Corridor\n\n"
+            f"🚨 *Defect Detected:* {cat}\n"
+            f"📊 *Severity:* {sev.title()} | *AI Confidence:* {conf:.1f}%\n"
+            f"🏢 *Assigned Dept:* {dept}\n"
+            f"💰 *Estimated Repair:* ₹{cost:,.0f}\n"
+            f"⏱️ *Estimated Fix Time:* {repair_time}\n"
+            f"⚠️ *Safety Risk:* {safety_risk}\n\n"
+            f"📝 *Description:* {summary}\n"
+            f"📍 *Location:* {effective_address}\n\n"
+            f"💡 *To update location:* Share your GPS pin or reply `Address: <street>`\n\n"
             f"Would you like to formally file this complaint with municipal authorities?"
         )
 
@@ -1327,12 +1362,15 @@ class WhatsAppService:
         if gemini_client and current_key:
             try:
                 system_instruction = (
-                    "You are CivicSense AI, the official municipal civic assistant for the city of Bengaluru. "
-                    "You help citizens report problems (potholes, garbage, water leaks, broken streetlights), "
-                    "track complaints, and understand municipal services. "
-                    "Keep responses concise (under 3 sentences), polite, and actionable. "
-                    "Remind users they can simply send a photo of any issue to report it immediately. "
-                    "Never fabricate incident numbers."
+                    "You are CivicSense AI, the official intelligent municipal civic assistant for the city of Bengaluru.\n"
+                    "Your duties:\n"
+                    "1. Help citizens report civic issues (potholes, road damage, water leaks, garbage dumps, broken streetlights, clogged drains).\n"
+                    "2. Explain municipal departments accurately (BBMP for roads & garbage, BWSSB for water & drainage, BESCOM for streetlights & power).\n"
+                    "3. Format responses neatly for WhatsApp with bold headers, concise bullet points, and friendly emojis.\n"
+                    "4. Keep replies concise (2 to 4 sentences maximum), polite, and actionable on mobile.\n"
+                    "5. Remind users they can simply send a photo here on WhatsApp to report any problem immediately.\n"
+                    "6. If the user writes in Hindi, Kannada, Telugu, or Hinglish, reply politely in the same language or friendly English.\n"
+                    "7. Never fabricate complaint IDs or personal contact information."
                 )
                 from google.genai import types
                 res = gemini_client.models.generate_content(
@@ -1346,10 +1384,12 @@ class WhatsAppService:
 
         # Resilient baseline fallback
         return (
-            "I am CivicSense AI, your smart municipal assistant.\n\n"
-            "• To *report an issue*, simply send a photograph of the problem.\n"
-            "• To *track a complaint*, reply: `track <Complaint ID>`\n"
-            "• For emergency hazards, our automated vision pipeline prioritizes critical incidents."
+            "🤖 *CivicSense AI Municipal Concierge*\n\n"
+            "I am here 24/7 to help you report and track municipal infrastructure defects across Bengaluru.\n\n"
+            "📸 *To report an issue:* Simply send a photograph of the defect.\n"
+            "🔍 *To track a ticket:* Reply `track <Complaint ID>`\n"
+            "📋 *To view your history:* Reply `my complaints`\n\n"
+            "Feel free to ask any civic question or send a photo to get started! 😊"
         )
 
     # ==========================================================================

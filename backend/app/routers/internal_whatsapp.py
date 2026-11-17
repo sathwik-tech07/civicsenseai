@@ -299,15 +299,61 @@ async def process_gateway_inbound_event(event: GatewayInboundEvent) -> None:
             ):
                 await whatsapp_service.update_draft_address(sender_phone, raw_text, db=db)
 
-            # K. Greetings & Help
+            # K. Greetings
             elif lower_text in (
-                "hi", "hello", "hey", "start", "help", "menu", "namaste", "hi!",
-                "hlo", "helo", "halo", "hii", "hiii", "hy", "namaskar"
-            ) or lower_text.startswith("hi ") or lower_text.startswith("hello ") or lower_text.startswith("hlo "):
+                "hi", "hello", "hey", "start", "namaste", "hi!",
+                "hlo", "helo", "halo", "hii", "hiii", "hy", "namaskar",
+                "vanakkam", "namaskara", "adaab", "good morning", "good evening", "good afternoon"
+            ) or lower_text.startswith("hi ") or lower_text.startswith("hello ") or lower_text.startswith("hlo ") or lower_text.startswith("hey "):
                 logger.info("[WHATSAPP_ROUTING] Greeting detected from %s ('%s'), dispatching WELCOME_MESSAGE", sender_phone, raw_text)
                 await whatsapp_service.send_text_message(sender_phone, WELCOME_MESSAGE)
 
-            # L. Conversational Complaint Initiation (Civic problem keywords)
+            # L. Quick Command Guide / Menu
+            elif lower_text in ("help", "menu", "commands", "options", "guide", "features", "what can you do"):
+                logger.info("[WHATSAPP_ROUTING] Help command requested by %s", sender_phone)
+                help_card = (
+                    "🤖 *CivicSense AI — Quick Command Guide*\n\n"
+                    "📸 *Report a Municipal Defect:*\n"
+                    "• Send a *photo* of any pothole, water leak, garbage dump, or broken light.\n"
+                    "• Or text a description: *'Broken pipe near MG Road'* to start a draft.\n\n"
+                    "🔍 *Tracking & Citizen Services:*\n"
+                    "• `track <Complaint ID>` — Check resolution status & assigned crew\n"
+                    "• `my complaints` — List all your active and resolved tickets\n"
+                    "• `escalate <ID> <reason>` — Request commissioner escalation\n"
+                    "• `rate <ID> <1-5>` — Submit satisfaction rating\n\n"
+                    "💡 *Conversational Concierge:*\n"
+                    "You can also ask me any civic question in plain English or regional languages!"
+                )
+                await whatsapp_service.send_text_message(sender_phone, help_card)
+
+            # M. Courtesy & Gratitude Responses
+            elif lower_text in (
+                "thanks", "thank you", "thank u", "thx", "thnx", "tq",
+                "dhanyawad", "dhanyavadagalu", "shukriya", "nandri", "great job",
+                "thank you so much", "thanks a lot", "thanks bot", "good job", "nice"
+            ):
+                logger.info("[WHATSAPP_ROUTING] Courtesy response to %s ('%s')", sender_phone, raw_text)
+                courtesy_msg = (
+                    "You're very welcome! 🙏\n\n"
+                    "CivicSense AI is here 24/7 to help keep our city clean, safe, and well-maintained. "
+                    "Feel free to message or send a photo anytime you spot a municipal defect! 😊"
+                )
+                await whatsapp_service.send_text_message(sender_phone, courtesy_msg)
+
+            # N. Acknowledgements & Pending Draft Reminder
+            elif lower_text in ("ok", "okay", "k", "kk", "sure", "got it", "alright", "fine", "cool", "understood"):
+                pending = whatsapp_service.pending_sessions.get_draft(sender_phone, db=db)
+                if pending:
+                    ack_msg = (
+                        f"Understood! 👍 You have an active complaint draft for *{pending.get('title') or 'Civic Defect'}*.\n\n"
+                        "• Reply *CONFIRM* to submit to municipal response teams.\n"
+                        "• Reply *CANCEL* to discard."
+                    )
+                else:
+                    ack_msg = "Understood! 👍 Send a photograph or describe any civic defect whenever you need assistance."
+                await whatsapp_service.send_text_message(sender_phone, ack_msg)
+
+            # O. Conversational Complaint Initiation (Civic problem keywords)
             elif any(k in lower_text for k in (
                 "pothole", "crater", "garbage", "trash", "waste", "water leak", "pipe burst", "leak",
                 "streetlight", "light pole", "drain", "drainage", "sewer", "sinkhole", "road damage",
@@ -316,7 +362,7 @@ async def process_gateway_inbound_event(event: GatewayInboundEvent) -> None:
                 logger.info("[WHATSAPP_ROUTING] Civic keyword detected from %s ('%s'), starting text draft", sender_phone, raw_text)
                 await whatsapp_service.handle_conversational_text_draft(sender_phone, raw_text, db=db)
 
-            # M. General Conversational Civic Assistance via Gemini 2.5 Flash
+            # P. General Conversational Civic Assistance via Gemini 2.5 Flash
             else:
                 logger.info("[WHATSAPP_ROUTING] Invoking conversational assistant for %s ('%s')", sender_phone, raw_text)
                 reply = await whatsapp_service.generate_conversational_reply(sender_phone, raw_text)
