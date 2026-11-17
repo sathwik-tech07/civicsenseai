@@ -219,6 +219,25 @@ async def process_inbound_messages(payload: MetaWebhookPayload) -> None:
                     if not sender_phone:
                         continue
 
+                    # Whitelist & Personal Account Privacy Filter
+                    incoming_text = ""
+                    if msg.type == "text" and msg.text:
+                        incoming_text = msg.text.body
+                    elif msg.type == "image" and msg.image:
+                        incoming_text = msg.image.caption or ""
+
+                    if not whatsapp_service.whitelist_manager.is_allowed(sender_phone, incoming_text, db=db):
+                        logger.info("[WHATSAPP_FILTER] Sender %s is not in allowed numbers whitelist (ignored)", sender_phone)
+                        continue
+
+                    # Strip optional '#civic' or '!civic' manual test prefix
+                    if msg.type == "text" and msg.text and msg.text.body:
+                        cleaned = msg.text.body.strip()
+                        if cleaned.lower().startswith("#civic"):
+                            msg.text.body = cleaned[6:].strip()
+                        elif cleaned.lower().startswith("!civic"):
+                            msg.text.body = cleaned[6:].strip()
+
                     try:
                         # ------------------------------------------------------
                         # 1. Interactive Button Replies

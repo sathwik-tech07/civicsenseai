@@ -477,6 +477,139 @@ class TestInternalWhatsAppGateway(unittest.TestCase):
             db.commit()
             db.close()
 
+    # ==========================================================================
+    # 6. WHATSAPP WHITELIST / PRIVACY FILTER TESTS
+    # ==========================================================================
+
+    @patch.object(whatsapp_service, "_send_via_gateway", new_callable=AsyncMock)
+    def test_whitelist_suppresses_unlisted_sender(self, mock_send):
+        """When whitelist is enabled, messages from unlisted numbers are suppressed to protect personal accounts."""
+        manager = whatsapp_service.whitelist_manager
+        orig_enabled = manager.is_enabled
+        try:
+            manager.set_enabled(True)
+            unlisted_phone = "919999888777"
+            # Ensure not in whitelist
+            manager.remove_number(unlisted_phone)
+
+            payload = {
+                "event_id": f"evt_unlisted_{int(time.time())}",
+                "event_type": "message",
+                "timestamp": int(time.time()),
+                "message": {
+                    "id": f"MSG_UNLISTED_{int(time.time())}",
+                    "from": unlisted_phone,
+                    "timestamp": int(time.time()),
+                    "type": "text",
+                    "text": {"body": "hello how are you"},
+                },
+            }
+            body = json.dumps(payload).encode("utf-8")
+            headers = self._generate_hmac_headers(body)
+            resp = self.client.post("/internal/whatsapp/events", content=body, headers=headers)
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.json()["status"], "ok")
+            mock_send.assert_not_called()
+        finally:
+            manager.set_enabled(orig_enabled)
+
+    @patch.object(whatsapp_service, "_send_via_gateway", new_callable=AsyncMock)
+    def test_whitelist_allows_listed_sender(self, mock_send):
+        """When whitelist is enabled, whitelisted numbers receive automated replies normally."""
+        manager = whatsapp_service.whitelist_manager
+        orig_enabled = manager.is_enabled
+        test_phone = "919876543210"
+        try:
+            manager.set_enabled(True)
+            manager.add_number(test_phone, label="Whitelisted QA Tester")
+            mock_send.return_value = "wam_mock_reply"
+
+            payload = {
+                "event_id": f"evt_listed_{int(time.time())}",
+                "event_type": "message",
+                "timestamp": int(time.time()),
+                "message": {
+                    "id": f"MSG_LISTED_{int(time.time())}",
+                    "from": test_phone,
+                    "timestamp": int(time.time()),
+                    "type": "text",
+                    "text": {"body": "hi there"},
+                },
+            }
+            body = json.dumps(payload).encode("utf-8")
+            headers = self._generate_hmac_headers(body)
+            resp = self.client.post("/internal/whatsapp/events", content=body, headers=headers)
+            self.assertEqual(resp.status_code, 200)
+            mock_send.assert_called()
+        finally:
+            manager.remove_number(test_phone)
+            manager.set_enabled(orig_enabled)
+
+    @patch.object(whatsapp_service, "_send_via_gateway", new_callable=AsyncMock)
+    def test_whitelist_bypass_keyword(self, mock_send):
+        """Messages starting with #civic or !civic bypass the whitelist filter."""
+        manager = whatsapp_service.whitelist_manager
+        orig_enabled = manager.is_enabled
+        unlisted_phone = "919999111222"
+        try:
+            manager.set_enabled(True)
+            manager.remove_number(unlisted_phone)
+            mock_send.return_value = "wam_mock_reply"
+
+            payload = {
+                "event_id": f"evt_bypass_{int(time.time())}",
+                "event_type": "message",
+                "timestamp": int(time.time()),
+                "message": {
+                    "id": f"MSG_BYPASS_{int(time.time())}",
+                    "from": unlisted_phone,
+                    "timestamp": int(time.time()),
+                    "type": "text",
+                    "text": {"body": "#civic hello I have an issue"},
+                },
+            }
+            body = json.dumps(payload).encode("utf-8")
+            headers = self._generate_hmac_headers(body)
+            resp = self.client.post("/internal/whatsapp/events", content=body, headers=headers)
+            self.assertEqual(resp.status_code, 200)
+            mock_send.assert_called()
+        finally:
+            manager.set_enabled(orig_enabled)
+
+    def test_whitelist_admin_crud_endpoints(self):
+        """Admin endpoints allow listing, adding, removing, and toggling whitelist."""
+        manager = whatsapp_service.whitelist_manager
+        orig_enabled = manager.is_enabled
+        try:
+            # 1. Non-admin forbidden
+            resp_cit = self.client.get("/api/v1/admin/whatsapp/whitelist", headers=self.cit_headers)
+            self.assertEqual(resp_cit.status_code, 403)
+
+            # 2. Admin list
+            resp = self.client.get("/api/v1/admin/whatsapp/whitelist", headers=self.admin_headers)
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertIn("enabled", data)
+            self.assertIn("allowed_numbers", data)
+
+            # 3. Admin add number
+            add_payload = {"phone": "919555444333", "label": "Community Lead"}
+            resp_add = self.client.post("/api/v1/admin/whatsapp/whitelist", json=add_payload, headers=self.admin_headers)
+            self.assertEqual(resp_add.status_code, 200)
+            self.assertEqual(resp_add.json()["phone"], "919555444333")
+
+            # 4. Admin remove number
+            resp_del = self.client.delete("/api/v1/admin/whatsapp/whitelist/919555444333", headers=self.admin_headers)
+            self.assertEqual(resp_del.status_code, 200)
+            self.assertTrue(resp_del.json()["success"])
+
+            # 5. Toggle whitelist
+            resp_toggle = self.client.post("/api/v1/admin/whatsapp/whitelist/toggle", json={"enabled": True}, headers=self.admin_headers)
+            self.assertEqual(resp_toggle.status_code, 200)
+            self.assertTrue(resp_toggle.json()["enabled"])
+        finally:
+            manager.set_enabled(orig_enabled)
+
 
 if __name__ == "__main__":
     unittest.main()

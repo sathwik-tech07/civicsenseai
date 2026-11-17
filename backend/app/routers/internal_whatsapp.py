@@ -31,6 +31,10 @@ from app.schemas.gateway import (
     GatewayOutboundRequest,
     GatewayOutboundResponse,
     AdminTestSendMessageRequest,
+    WhatsAppAllowedNumberItem,
+    WhatsAppWhitelistResponse,
+    AddAllowedNumberRequest,
+    ToggleWhitelistRequest,
 )
 from app.services.whatsapp_service import (
     whatsapp_service,
@@ -150,6 +154,29 @@ async def process_gateway_inbound_event(event: GatewayInboundEvent) -> None:
 
     db = SessionLocal()
     try:
+        # Whitelist & Personal WhatsApp Privacy Filter
+        incoming_body = ""
+        if msg.type == "text" and msg.text:
+            incoming_body = msg.text.body.strip()
+        elif msg.type == "image" and msg.resolved_media and msg.resolved_media.caption:
+            incoming_body = msg.resolved_media.caption.strip()
+
+        if not whatsapp_service.whitelist_manager.is_allowed(sender_phone, incoming_body, db=db):
+            logger.info(
+                "[WHATSAPP_FILTER] Sender %s is not in allowed numbers whitelist (whitelist active). "
+                "Suppressing automated reply to protect personal WhatsApp account.",
+                sender_phone,
+            )
+            return
+
+        # Strip optional '#civic' or '!civic' manual test prefix
+        if msg.type == "text" and msg.text:
+            cleaned_text = msg.text.body.strip()
+            if cleaned_text.lower().startswith("#civic"):
+                msg.text.body = cleaned_text[6:].strip()
+            elif cleaned_text.lower().startswith("!civic"):
+                msg.text.body = cleaned_text[6:].strip()
+
         # 1. Text Messages (Commands, Citizen Chat, Confirmations)
         if msg.type == "text" and msg.text:
             raw_text = msg.text.body.strip()
@@ -706,3 +733,102 @@ async def admin_test_send_whatsapp_message(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Outbound dispatch failed: {exc}",
         )
+
+
+# ==============================================================================
+# ALLOWED NUMBERS / WHITELIST MANAGEMENT (PERSONAL ACCOUNT PRIVACY)
+# ==============================================================================
+
+@router.get("/api/v1/admin/whatsapp/whitelist", response_model=WhatsAppWhitelistResponse)
+@router.get("/admin/whatsapp/whitelist", response_model=WhatsAppWhitelistResponse)
+async def get_whatsapp_whitelist(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_or_commissioner),
+):
+    """
+    Returns the current allowed numbers whitelist configuration and contact list.
+    Restricted to Administrator and Commissioner roles.
+    """
+    numbers = whatsapp_service.whitelist_manager.list_numbers(db=db)
+    items = [
+        WhatsAppAllowedNumberItem(
+            phone=n.get("phone", ""),
+            label=n.get("label", "Tester"),
+            enabled=n.get("enabled", True),
+            created_at=n.get("created_at"),
+        )
+        for n in numbers
+    ]
+    return WhatsAppWhitelistResponse(
+        enabled=whatsapp_service.whitelist_manager.is_enabled,
+        allowed_numbers=items,
+        total_count=len(items),
+        bypass_prefix="#civic",
+    )
+
+
+@router.post("/api/v1/admin/whatsapp/whitelist", response_model=WhatsAppAllowedNumberItem)
+@router.post("/admin/whatsapp/whitelist", response_model=WhatsAppAllowedNumberItem)
+async def add_whatsapp_allowed_number(
+    payload: AddAllowedNumberRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_or_commissioner),
+):
+    """
+    Adds a new phone number to the allowed numbers whitelist.
+    The bot will only respond to this number (and other whitelisted contacts).
+    Restricted to Administrator and Commissioner roles.
+    """
+    try:
+        entry = whatsapp_service.whitelist_manager.add_number(
+            phone=payload.phone,
+            label=payload.label,
+            db=db,
+        )
+        return WhatsAppAllowedNumberItem(
+            phone=entry["phone"],
+            label=entry["label"],
+            enabled=entry["enabled"],
+            created_at=entry["created_at"],
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+
+
+@router.delete("/api/v1/admin/whatsapp/whitelist/{phone}")
+@router.delete("/admin/whatsapp/whitelist/{phone}")
+async def remove_whatsapp_allowed_number(
+    phone: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_or_commissioner),
+):
+    """
+    Removes a phone number from the allowed numbers whitelist.
+    Restricted to Administrator and Commissioner roles.
+    """
+    removed = whatsapp_service.whitelist_manager.remove_number(phone=phone, db=db)
+    return {
+        "status": "removed" if removed else "not_found",
+        "phone": phone,
+        "success": removed,
+    }
+
+
+@router.post("/api/v1/admin/whatsapp/whitelist/toggle")
+@router.post("/admin/whatsapp/whitelist/toggle")
+async def toggle_whatsapp_whitelist(
+    payload: ToggleWhitelistRequest,
+    current_user: User = Depends(require_admin_or_commissioner),
+):
+    """
+    Enables or disables whitelist mode.
+    When enabled, the bot ONLY responds to whitelisted phone numbers.
+    When disabled, open mode is active.
+    Restricted to Administrator and Commissioner roles.
+    """
+    whatsapp_service.whitelist_manager.set_enabled(payload.enabled)
+    return {
+        "status": "updated",
+        "enabled": whatsapp_service.whitelist_manager.is_enabled,
+        "whitelist_enabled": whatsapp_service.whitelist_manager.is_enabled,
+    }

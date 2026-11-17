@@ -433,6 +433,180 @@ class StaffDeviceLinkManager:
 
 
 # ==============================================================================
+# WHATSAPP ALLOWED NUMBERS / WHITELIST MANAGER (PERSONAL ACCOUNT PRIVACY)
+# ==============================================================================
+
+class WhatsAppWhitelistManager:
+    """
+    Manages allowed/whitelisted phone numbers for WhatsApp interaction.
+    Prevents the CivicSense AI bot from replying to personal, non-testing chats
+    when running on a personal WhatsApp account.
+
+    Supports:
+    1. Initial population from WHATSAPP_ALLOWED_NUMBERS environment variable.
+    2. Dynamic runtime additions/removals with thread-safe caching.
+    3. PostgreSQL-backed persistence via WhatsAppAllowedNumber (with graceful in-memory fallback).
+    4. Smart phone number normalization (matches with/without +91, spaces, dashes).
+    5. Bypass keyword '#civic' for manual testing from any device.
+    """
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._allowed: Dict[str, Dict[str, Any]] = {}
+        self._enabled: bool = getattr(settings, "WHATSAPP_WHITELIST_ENABLED", True)
+        self._load_from_env()
+
+    def _load_from_env(self) -> None:
+        raw = getattr(settings, "WHATSAPP_ALLOWED_NUMBERS", "")
+        if raw:
+            for item in raw.split(","):
+                clean = item.strip()
+                if clean:
+                    digits = re.sub(r"[^\d]", "", clean)
+                    if digits:
+                        self._allowed[digits] = {
+                            "phone": digits,
+                            "label": "Configured Allowed Number",
+                            "enabled": True,
+                            "created_at": datetime.utcnow().isoformat(),
+                        }
+
+    @property
+    def is_enabled(self) -> bool:
+        return self._enabled
+
+    def set_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            self._enabled = enabled
+
+    def add_number(self, phone: str, label: Optional[str] = None, db: Optional[Session] = None) -> Dict[str, Any]:
+        digits = re.sub(r"[^\d]", "", phone)
+        if len(digits) < 7:
+            raise ValueError(f"Invalid phone number '{phone}': must have at least 7 digits.")
+
+        now_iso = datetime.utcnow().isoformat()
+        entry = {
+            "phone": digits,
+            "label": label or "Tester",
+            "enabled": True,
+            "created_at": now_iso,
+        }
+
+        with self._lock:
+            self._allowed[digits] = entry
+
+        # Persist to DB if session provided
+        if db is not None:
+            try:
+                from app.models.whatsapp_allowed_number import WhatsAppAllowedNumber
+                obj = db.query(WhatsAppAllowedNumber).filter(WhatsAppAllowedNumber.phone == digits).first()
+                if obj:
+                    obj.label = label or obj.label
+                    obj.enabled = True
+                else:
+                    obj = WhatsAppAllowedNumber(phone=digits, label=label or "Tester", enabled=True)
+                    db.add(obj)
+                db.commit()
+            except Exception as e:
+                logger.debug("Could not persist allowed number to DB (fallback to in-memory): %s", e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+        return entry
+
+    def remove_number(self, phone: str, db: Optional[Session] = None) -> bool:
+        digits = re.sub(r"[^\d]", "", phone)
+        with self._lock:
+            removed = self._allowed.pop(digits, None) is not None
+
+        if db is not None:
+            try:
+                from app.models.whatsapp_allowed_number import WhatsAppAllowedNumber
+                db.query(WhatsAppAllowedNumber).filter(WhatsAppAllowedNumber.phone == digits).delete()
+                db.commit()
+            except Exception as e:
+                logger.debug("Could not delete allowed number from DB: %s", e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+        return removed
+
+    def list_numbers(self, db: Optional[Session] = None) -> List[Dict[str, Any]]:
+        # Sync from DB if available
+        if db is not None:
+            try:
+                from app.models.whatsapp_allowed_number import WhatsAppAllowedNumber
+                db_entries = db.query(WhatsAppAllowedNumber).filter(WhatsAppAllowedNumber.enabled == True).all()
+                with self._lock:
+                    for obj in db_entries:
+                        if obj.phone not in self._allowed:
+                            self._allowed[obj.phone] = {
+                                "phone": obj.phone,
+                                "label": obj.label,
+                                "enabled": obj.enabled,
+                                "created_at": obj.created_at.isoformat() if obj.created_at else "",
+                            }
+            except Exception as e:
+                logger.debug("Could not load allowed numbers from DB: %s", e)
+
+        with self._lock:
+            return list(self._allowed.values())
+
+    def is_allowed(self, sender_phone: str, message_text: str = "", db: Optional[Session] = None) -> bool:
+        if not self._enabled:
+            return True  # Whitelist disabled: open mode
+
+        # Bypass keyword: messages starting with #civic or !civic are always allowed
+        text_lower = (message_text or "").strip().lower()
+        if text_lower.startswith("#civic") or text_lower.startswith("!civic"):
+            return True
+
+        sender_digits = re.sub(r"[^\d]", "", sender_phone)
+        if not sender_digits:
+            return False
+
+        with self._lock:
+            allowed_keys = list(self._allowed.keys())
+
+        # Check DB if not found in memory
+        if db is not None and not any(self._matches(sender_digits, k) for k in allowed_keys):
+            try:
+                from app.models.whatsapp_allowed_number import WhatsAppAllowedNumber
+                db_entries = db.query(WhatsAppAllowedNumber).filter(WhatsAppAllowedNumber.enabled == True).all()
+                with self._lock:
+                    for obj in db_entries:
+                        self._allowed[obj.phone] = {
+                            "phone": obj.phone,
+                            "label": obj.label,
+                            "enabled": obj.enabled,
+                            "created_at": obj.created_at.isoformat() if obj.created_at else "",
+                        }
+                    allowed_keys = list(self._allowed.keys())
+            except Exception:
+                pass
+
+        return any(self._matches(sender_digits, k) for k in allowed_keys)
+
+    @staticmethod
+    def _matches(sender_digits: str, allowed_digits: str) -> bool:
+        if sender_digits == allowed_digits:
+            return True
+        # Match trailing 10 digits (national format for India, US, etc.)
+        if len(sender_digits) >= 10 and len(allowed_digits) >= 10:
+            if sender_digits[-10:] == allowed_digits[-10:]:
+                return True
+        # Prefix / suffix matching for partial country codes
+        if len(allowed_digits) >= 10 and sender_digits.endswith(allowed_digits):
+            return True
+        if len(sender_digits) >= 10 and allowed_digits.endswith(sender_digits):
+            return True
+        return False
+
+
+# ==============================================================================
 # SERVICE CLIENT IMPLEMENTATION
 # ==============================================================================
 
@@ -470,6 +644,7 @@ class WhatsAppService:
         self.backoff_seconds = backoff_seconds
         self.pending_sessions = PendingSessionStore()
         self.otp_manager = StaffDeviceLinkManager()
+        self.whitelist_manager = WhatsAppWhitelistManager()
 
     def _redact_secrets(self, text: Any) -> str:
         """Redacts sensitive credentials from error messages, URLs, and exception text."""

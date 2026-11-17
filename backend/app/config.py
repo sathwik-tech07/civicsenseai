@@ -1,4 +1,5 @@
 import os
+import sys
 from pydantic import BaseModel, model_validator
 
 INSECURE_DEFAULT_SECRET = "civicsense-ai-super-secret-key-change-in-production-2026"
@@ -145,6 +146,14 @@ class Settings(BaseModel):
         "WHATSAPP_GATEWAY_ENABLED",
         "true" if os.getenv("WHATSAPP_PROVIDER", "whatsmeow").lower() == "whatsmeow" else "false"
     ).lower() in ("true", "1", "yes")
+
+    # WhatsApp Personal Account Privacy / Whitelist Filter
+    # When enabled, the bot ONLY responds to whitelisted phone numbers (protecting personal chats from automated replies)
+    WHATSAPP_WHITELIST_ENABLED: bool = os.getenv(
+        "WHATSAPP_WHITELIST_ENABLED",
+        "false" if ("pytest" in sys.modules or "PYTEST_CURRENT_TEST" in os.environ or os.getenv("ENVIRONMENT", "").lower() in ("test", "testing")) else "true"
+    ).lower() in ("true", "1", "yes")
+    WHATSAPP_ALLOWED_NUMBERS: str = os.getenv("WHATSAPP_ALLOWED_NUMBERS", "919573161396")
 
     # Staging Isolation Guard
     STAGING_DATABASE_ONLY: bool = os.getenv("STAGING_DATABASE_ONLY", "false").lower() in ("true", "1", "yes")
