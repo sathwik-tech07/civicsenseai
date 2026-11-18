@@ -3,6 +3,17 @@ import type { Incident, IncidentStatus, IncidentSeverity, IncidentType, Workflow
 export const TOKEN_STORAGE_KEY = 'civicsense_jwt';
 
 const getApiBaseUrl = (): string => {
+  // 0. Manual localStorage override for dynamic developer/testing environment switching
+  if (typeof window !== 'undefined') {
+    try {
+      const override = localStorage.getItem('civicsense_api_url');
+      if (override && override.trim()) {
+        const clean = override.trim().replace(/\/$/, '');
+        return clean.endsWith('/api/v1') ? clean : `${clean}/api/v1`;
+      }
+    } catch (_) {}
+  }
+
   // 1. Explicit environment variable takes highest precedence
   const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL;
   if (envUrl && typeof envUrl === 'string' && envUrl.trim()) {
@@ -957,13 +968,40 @@ export async function apiFetchWhatsAppGatewayStatus(): Promise<{
   connected: boolean;
   logged_in: boolean;
   jid?: string;
+  device_jid?: string;
   uptime_seconds: number;
   goroutines: number;
   memory_alloc_mb: number;
+  memory_mb?: number;
 }> {
-  const res = await apiFetch('/admin/whatsapp/status');
-  if (!res.ok) throw new Error('Failed to fetch WhatsApp Gateway status');
-  return await res.json();
+  try {
+    const res = await apiFetch('/admin/whatsapp/status');
+    if (!res.ok) {
+      return {
+        status: 'offline',
+        connected: false,
+        logged_in: false,
+        uptime_seconds: 0,
+        goroutines: 0,
+        memory_alloc_mb: 0.0,
+      };
+    }
+    const data = await res.json();
+    return {
+      ...data,
+      jid: data.jid || data.device_jid,
+      memory_alloc_mb: typeof data.memory_alloc_mb === 'number' ? data.memory_alloc_mb : (data.memory_mb || 0.0),
+    };
+  } catch (err) {
+    return {
+      status: 'offline',
+      connected: false,
+      logged_in: false,
+      uptime_seconds: 0,
+      goroutines: 0,
+      memory_alloc_mb: 0.0,
+    };
+  }
 }
 
 /**
@@ -976,9 +1014,23 @@ export async function apiFetchWhatsAppGatewayQR(): Promise<{
   generated_at?: string;
   expires_at?: string;
 }> {
-  const res = await apiFetch('/admin/whatsapp/qr');
-  if (!res.ok) throw new Error('Failed to fetch WhatsApp pairing QR code');
-  return await res.json();
+  try {
+    const res = await apiFetch('/admin/whatsapp/qr');
+    if (!res.ok) {
+      return {
+        status: 'offline',
+        qr_code: undefined,
+        qr_png_base64: undefined,
+      };
+    }
+    return await res.json();
+  } catch (err) {
+    return {
+      status: 'offline',
+      qr_code: undefined,
+      qr_png_base64: undefined,
+    };
+  }
 }
 
 /**
@@ -996,5 +1048,14 @@ export async function apiReconnectWhatsAppGateway(): Promise<any> {
 export async function apiDisconnectWhatsAppGateway(): Promise<any> {
   const res = await apiFetch('/admin/whatsapp/disconnect', { method: 'POST' });
   if (!res.ok) throw new Error('Failed to disconnect WhatsApp');
+  return await res.json();
+}
+
+/**
+ * 41. POST /api/v1/admin/whatsapp/logout
+ */
+export async function apiLogoutWhatsAppGateway(): Promise<any> {
+  const res = await apiFetch('/admin/whatsapp/logout', { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to unlink/logout WhatsApp device');
   return await res.json();
 }

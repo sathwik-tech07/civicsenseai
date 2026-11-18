@@ -581,7 +581,7 @@ async def get_gateway_status(current_user: User = Depends(require_admin_or_commi
     secret = getattr(settings, "WHATSAPP_GATEWAY_SECRET", "civicsense-wa-gateway-internal-secret-2026")
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
                 f"{gateway_url}/api/v1/status",
                 headers={"Authorization": f"Bearer {secret}"},
@@ -590,9 +590,22 @@ async def get_gateway_status(current_user: User = Depends(require_admin_or_commi
                 data = resp.json()
                 if "uptime_seconds" in data and isinstance(data["uptime_seconds"], (float, int)):
                     data["uptime_seconds"] = round(float(data["uptime_seconds"]), 1)
+                # Normalize field names between Go whatsmeow microservice and FastAPI schema
+                if not data.get("jid") and data.get("device_jid"):
+                    data["jid"] = data["device_jid"]
+                if not data.get("memory_alloc_mb") and data.get("memory_mb"):
+                    data["memory_alloc_mb"] = float(data["memory_mb"])
                 return data
-            raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    except httpx.RequestError as re:
+            logger.warning("WhatsApp Gateway returned %s: %s", resp.status_code, resp.text[:200])
+            return GatewayStatusResponse(
+                status="starting_up" if resp.status_code in (502, 503) else "offline",
+                connected=False,
+                logged_in=False,
+                uptime_seconds=0,
+                goroutines=0,
+                memory_alloc_mb=0.0,
+            )
+    except Exception as re:
         logger.warning("Could not reach WhatsApp Gateway at %s: %s", gateway_url, re)
         return GatewayStatusResponse(
             status="offline",
@@ -614,15 +627,20 @@ async def get_gateway_qr(current_user: User = Depends(require_admin_or_commissio
     secret = getattr(settings, "WHATSAPP_GATEWAY_SECRET", "civicsense-wa-gateway-internal-secret-2026")
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
                 f"{gateway_url}/api/v1/qr",
                 headers={"Authorization": f"Bearer {secret}"},
             )
             if resp.status_code == 200:
                 return resp.json()
-            raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    except httpx.RequestError as re:
+            logger.warning("WhatsApp Gateway QR returned %s: %s", resp.status_code, resp.text[:200])
+            return GatewayQRResponse(
+                status="starting_up" if resp.status_code in (502, 503) else "offline",
+                qr_code=None,
+                qr_png_base64=None,
+            )
+    except Exception as re:
         logger.warning("Could not reach WhatsApp Gateway QR endpoint at %s: %s", gateway_url, re)
         return GatewayQRResponse(
             status="offline",
@@ -641,13 +659,16 @@ async def trigger_gateway_reconnect(current_user: User = Depends(require_admin_o
     secret = getattr(settings, "WHATSAPP_GATEWAY_SECRET", "civicsense-wa-gateway-internal-secret-2026")
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"{gateway_url}/api/v1/reconnect",
                 headers={"Authorization": f"Bearer {secret}"},
             )
-            return resp.json()
+            if resp.status_code == 200:
+                return resp.json()
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
     except Exception as e:
+        logger.error("Could not trigger WhatsApp Gateway reconnect: %s", e)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
 
 
@@ -661,13 +682,39 @@ async def trigger_gateway_disconnect(current_user: User = Depends(require_admin_
     secret = getattr(settings, "WHATSAPP_GATEWAY_SECRET", "civicsense-wa-gateway-internal-secret-2026")
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"{gateway_url}/api/v1/disconnect",
                 headers={"Authorization": f"Bearer {secret}"},
             )
-            return resp.json()
+            if resp.status_code == 200:
+                return resp.json()
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
     except Exception as e:
+        logger.error("Could not trigger WhatsApp Gateway disconnect: %s", e)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+
+
+@router.post("/api/v1/admin/whatsapp/logout")
+async def trigger_gateway_logout(current_user: User = Depends(require_admin_or_commissioner)):
+    """
+    Unlinks paired WhatsApp device and resets to a clean state for fresh QR pairing.
+    Restricted to authenticated Administrator and Commissioner roles.
+    """
+    gateway_url = getattr(settings, "WHATSAPP_GATEWAY_URL", "http://localhost:8085").rstrip("/")
+    secret = getattr(settings, "WHATSAPP_GATEWAY_SECRET", "civicsense-wa-gateway-internal-secret-2026")
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{gateway_url}/api/v1/logout",
+                headers={"Authorization": f"Bearer {secret}"},
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    except Exception as e:
+        logger.error("Could not trigger WhatsApp Gateway logout: %s", e)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
 
 
