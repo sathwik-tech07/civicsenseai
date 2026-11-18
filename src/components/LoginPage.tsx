@@ -659,32 +659,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   </button>
                 </div>
 
-                {/* Demo Password Auto-Fill Chip & Forgot Password */}
+                {/* Forgot Password */}
                 {!isSignUp && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
-                    {!isStrictProduction ? (
-                      <span style={{ fontSize: 11, color: '#94A3B8' }}>
-                        Preset Password:{' '}
-                        <button
-                          type="button"
-                          onClick={() => setPassword('password123')}
-                          style={{
-                            background: `${currentTheme.primary}18`,
-                            border: `1px solid ${currentTheme.primary}40`,
-                            color: currentTheme.primary,
-                            fontWeight: 700,
-                            padding: '2px 7px',
-                            borderRadius: 6,
-                            cursor: 'pointer',
-                            fontSize: 11,
-                            fontFamily: 'var(--font-mono)',
-                            transition: 'all 0.2s',
-                          }}
-                        >
-                          password123
-                        </button>
-                      </span>
-                    ) : <span />}
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginTop: 6 }}>
                     <button
                       type="button"
                       onClick={() => {
