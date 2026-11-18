@@ -56,7 +56,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submittingSeconds, setSubmittingSeconds] = useState(0);
   const [isSignUp, setIsSignUp] = useState(false);
   const [focusedField, setFocusedField] = useState<string | null>(null);
 
@@ -71,20 +70,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     const interval = setInterval(updateTime, 1000);
     return () => clearInterval(interval);
   }, []);
-
-  // Timer for Cloud Server Warmup Feedback
-  useEffect(() => {
-    let timer: any;
-    if (isSubmitting) {
-      setSubmittingSeconds(0);
-      timer = setInterval(() => {
-        setSubmittingSeconds((s) => s + 1);
-      }, 1000);
-    } else {
-      setSubmittingSeconds(0);
-    }
-    return () => clearInterval(timer);
-  }, [isSubmitting]);
 
   // Password Recovery State
   const [showRecoveryModal, setShowRecoveryModal] = useState(false);
@@ -371,10 +356,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             {/* Smart Feature Chips */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 24 }}>
               {[
-                { title: 'Gemini 2.5 Flash Vision', desc: 'Instant defect detection' },
-                { title: 'WhatsApp Closed-Loop', desc: 'Direct citizen updates' },
-                { title: 'Dynamic GIS Dispatch', desc: 'Autonomous route triage' },
-                { title: 'XAI Explainability Core', desc: 'Audited repair budget' },
+                { title: 'Autonomous Vision Core', desc: 'Instant defect & hazard detection' },
+                { title: '24/7 WhatsApp Closed-Loop', desc: 'Direct citizen updates & tracking' },
+                { title: 'Dynamic GIS Dispatch', desc: 'Autonomous field crew routing' },
+                { title: 'Predictive Budget Engine', desc: 'Audited repair cost estimation' },
               ].map((feat, idx) => (
                 <div
                   key={idx}
@@ -752,11 +737,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                 {isSubmitting ? (
                   <>
                     <Loader2 size={18} className="animate-spin" color="#000" />
-                    <span>
-                      {submittingSeconds >= 3 
-                        ? 'Waking Cloud Server & Database...' 
-                        : 'Authenticating Credentials...'}
-                    </span>
+                    <span>{isSignUp ? 'Creating Account...' : 'Entering Command Center...'}</span>
                   </>
                 ) : (
                   <>
