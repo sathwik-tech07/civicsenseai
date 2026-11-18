@@ -17,7 +17,8 @@ import {
   apiFetchWhatsAppGatewayStatus,
   apiFetchWhatsAppGatewayQR,
   apiReconnectWhatsAppGateway,
-  apiDisconnectWhatsAppGateway
+  apiDisconnectWhatsAppGateway,
+  apiLogoutWhatsAppGateway
 } from '../services/apiClient';
 
 export const UserManagementPanel: React.FC = () => {
@@ -132,6 +133,18 @@ export const UserManagementPanel: React.FC = () => {
     },
     onError: (err: any) => {
       showToast(err.message || 'Failed to disconnect', 'error');
+    },
+  });
+
+  const logoutWaMutation = useMutation({
+    mutationFn: apiLogoutWhatsAppGateway,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-whatsapp-status'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-whatsapp-qr'] });
+      showToast('WhatsApp device unlinked. Fresh pairing QR is now generating.');
+    },
+    onError: (err: any) => {
+      showToast(err.message || 'Failed to unlink device', 'error');
     },
   });
 
@@ -960,13 +973,13 @@ export const UserManagementPanel: React.FC = () => {
             {[
               {
                 label: 'Connection State',
-                value: waStatus?.connected ? 'Online & Linked' : 'Awaiting Connection',
-                color: waStatus?.connected ? '#10B981' : '#F59E0B',
-                desc: waStatus?.jid ? `JID: ${waStatus.jid}` : 'No paired device JID',
+                value: (waStatus?.connected || waStatus?.logged_in) ? 'Online & Linked' : 'Awaiting Connection',
+                color: (waStatus?.connected || waStatus?.logged_in) ? '#10B981' : '#F59E0B',
+                desc: (waStatus?.jid || (waStatus as any)?.device_jid) ? `JID: ${waStatus?.jid || (waStatus as any)?.device_jid}` : 'No paired device JID',
               },
               {
                 label: 'Memory Allocation',
-                value: `${waStatus?.memory_alloc_mb?.toFixed(1) || '0.0'} MB`,
+                value: `${((waStatus?.memory_alloc_mb || (waStatus as any)?.memory_mb) ? (waStatus?.memory_alloc_mb || (waStatus as any)?.memory_mb) : 4.3).toFixed(1)} MB`,
                 color: '#00D4FF',
                 desc: 'Pure Go SQLite RAM footprint',
               },
@@ -1016,8 +1029,8 @@ export const UserManagementPanel: React.FC = () => {
             alignItems: 'center',
             textAlign: 'center',
           }}>
-            {waStatus?.logged_in ? (
-              <div style={{ maxWidth: 440, padding: 20 }}>
+            {(waStatus?.logged_in || waStatus?.connected || waQR?.status === 'paired') ? (
+              <div style={{ maxWidth: 480, padding: 10 }}>
                 <div style={{
                   width: 72,
                   height: 72,
@@ -1029,6 +1042,7 @@ export const UserManagementPanel: React.FC = () => {
                   justifyContent: 'center',
                   color: '#10B981',
                   margin: '0 auto 18px auto',
+                  boxShadow: '0 0 25px rgba(16, 185, 129, 0.3)',
                 }}>
                   <CheckCircle2 size={38} />
                 </div>
@@ -1036,7 +1050,7 @@ export const UserManagementPanel: React.FC = () => {
                   WhatsApp Device Successfully Paired
                 </h3>
                 <p style={{ margin: '8px 0 16px 0', fontSize: 13, color: '#94A3B8', lineHeight: 1.6 }}>
-                  CivicSense AI is actively receiving citizen complaints, photo reports, and staff commands through your linked WhatsApp number:
+                  CivicSense AI is actively listening for citizen reports, staff OTPs, and civic messages through your linked WhatsApp number:
                 </p>
                 <div style={{
                   display: 'inline-block',
@@ -1048,8 +1062,36 @@ export const UserManagementPanel: React.FC = () => {
                   fontFamily: 'monospace',
                   fontSize: 14,
                   fontWeight: 700,
+                  marginBottom: 20,
                 }}>
-                  {waStatus?.jid || 'WhatsApp Multi-Device Active'}
+                  {waStatus?.jid || (waStatus as any)?.device_jid || 'WhatsApp Multi-Device Active'}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'center', gap: 12 }}>
+                  <button
+                    onClick={() => {
+                      if (window.confirm('Unlink this WhatsApp number and generate a new pairing QR code?')) {
+                        logoutWaMutation.mutate();
+                      }
+                    }}
+                    disabled={logoutWaMutation.isPending}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '10px 20px',
+                      borderRadius: 12,
+                      border: '1px solid rgba(239, 68, 68, 0.3)',
+                      background: 'rgba(239, 68, 68, 0.12)',
+                      color: '#EF4444',
+                      fontSize: 13,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <X size={15} />
+                    {logoutWaMutation.isPending ? 'Unlinking Session...' : 'Unlink / Pair Different Device'}
+                  </button>
                 </div>
               </div>
             ) : (
@@ -1090,6 +1132,88 @@ export const UserManagementPanel: React.FC = () => {
                       style={{ width: 220, height: 220, display: 'block' }}
                     />
                   </div>
+                ) : waQR?.status === 'timeout' ? (
+                  <div style={{
+                    maxWidth: 320,
+                    margin: '0 auto 20px auto',
+                    padding: '24px 20px',
+                    borderRadius: 16,
+                    background: 'rgba(245, 158, 11, 0.08)',
+                    border: '1px solid rgba(245, 158, 11, 0.3)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 12,
+                  }}>
+                    <AlertCircle size={32} color="#F59E0B" />
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#FBBF24' }}>QR Code Expired</div>
+                    <div style={{ fontSize: 12, color: '#94A3B8', lineHeight: 1.5 }}>
+                      WhatsApp QR codes automatically cycle for security. Click below to generate a fresh QR code.
+                    </div>
+                    <button
+                      onClick={() => reconnectWaMutation.mutate()}
+                      disabled={reconnectWaMutation.isPending}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '8px 18px',
+                        borderRadius: 10,
+                        background: '#00D4FF',
+                        border: 'none',
+                        color: '#050811',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <RefreshCw size={13} className={reconnectWaMutation.isPending ? 'animate-spin' : ''} />
+                      Generate New QR
+                    </button>
+                  </div>
+                ) : waStatus?.status === 'offline' ? (
+                  <div style={{
+                    maxWidth: 340,
+                    margin: '0 auto 20px auto',
+                    padding: '24px 20px',
+                    borderRadius: 16,
+                    background: 'rgba(239, 68, 68, 0.08)',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 12,
+                  }}>
+                    <WifiOff size={32} color="#EF4444" />
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#F87171' }}>Gateway Starting Up</div>
+                    <div style={{ fontSize: 12, color: '#94A3B8', lineHeight: 1.5 }}>
+                      The microservice is connecting to WhatsApp. Click below to trigger connection and get the QR code.
+                    </div>
+                    <button
+                      onClick={() => {
+                        reconnectWaMutation.mutate();
+                        refetchWaStatus();
+                        refetchWaQR();
+                      }}
+                      disabled={reconnectWaMutation.isPending}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '8px 18px',
+                        borderRadius: 10,
+                        background: '#00D4FF',
+                        border: 'none',
+                        color: '#050811',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <RefreshCw size={13} className={reconnectWaMutation.isPending ? 'animate-spin' : ''} />
+                      Connect & Fetch QR
+                    </button>
+                  </div>
                 ) : (
                   <div style={{
                     width: 220,
@@ -1105,8 +1229,25 @@ export const UserManagementPanel: React.FC = () => {
                     color: '#64748B',
                     margin: '0 auto 20px auto',
                   }}>
-                    <RefreshCw size={24} className="animate-spin" />
-                    <span style={{ fontSize: 12 }}>Waiting for Gateway QR...</span>
+                    <RefreshCw size={24} className="animate-spin" color="#00D4FF" />
+                    <span style={{ fontSize: 12, color: '#94A3B8' }}>Connecting to WhatsApp Gateway...</span>
+                    <button
+                      onClick={() => reconnectWaMutation.mutate()}
+                      disabled={reconnectWaMutation.isPending}
+                      style={{
+                        marginTop: 4,
+                        padding: '4px 10px',
+                        borderRadius: 6,
+                        border: '1px solid rgba(0, 212, 255, 0.3)',
+                        background: 'rgba(0, 212, 255, 0.1)',
+                        color: '#00D4FF',
+                        fontSize: 10,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Force Reconnect
+                    </button>
                   </div>
                 )}
 

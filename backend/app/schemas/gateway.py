@@ -115,7 +115,7 @@ class GatewayStatusResponse(BaseModel):
     connected: bool
     logged_in: bool
     jid: Optional[str] = None
-    uptime_seconds: int = 0
+    uptime_seconds: float = 0.0
     goroutines: int = 0
     memory_alloc_mb: float = 0.0
 
@@ -130,4 +130,38 @@ class GatewayQRResponse(BaseModel):
     generated_at: Optional[str] = None
     expires_at: Optional[str] = None
 
+    model_config = ConfigDict(extra="allow")
+
+
+class AdminTestSendMessageRequest(BaseModel):
+    """Payload for administrative test WhatsApp dispatch."""
+    recipient: str = Field(..., description="Target phone number or JID")
+    message: str = Field("Hello from CivicSense AI Smart City Platform!", description="Message text")
+    model_config = ConfigDict(extra="allow")
+
+
+class WhatsAppAllowedNumberItem(BaseModel):
+    phone: str
+    label: Optional[str] = "Tester"
+    enabled: bool = True
+    created_at: Optional[str] = None
+    model_config = ConfigDict(extra="allow")
+
+
+class WhatsAppWhitelistResponse(BaseModel):
+    enabled: bool
+    allowed_numbers: list[WhatsAppAllowedNumberItem]
+    total_count: int
+    bypass_prefix: str = "#civic"
+    model_config = ConfigDict(extra="allow")
+
+
+class AddAllowedNumberRequest(BaseModel):
+    phone: str = Field(..., description="Phone number with or without country code, e.g. 919876543210 or 9876543210")
+    label: Optional[str] = Field("Tester", description="Friendly label for the allowed contact")
+    model_config = ConfigDict(extra="allow")
+
+
+class ToggleWhitelistRequest(BaseModel):
+    enabled: bool = Field(..., description="True to enable whitelist mode, False for open mode")
     model_config = ConfigDict(extra="allow")

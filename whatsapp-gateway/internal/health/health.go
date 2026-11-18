@@ -1,6 +1,7 @@
 package health
 
 import (
+	"math"
 	"runtime"
 	"time"
 
@@ -11,16 +12,16 @@ import (
 var startTime = time.Now()
 
 type HealthResponse struct {
-	Status        string       `json:"status"` // "ok" or "degraded"
-	Service       string       `json:"service"`
-	Version       string       `json:"version"`
-	UptimeSeconds float64      `json:"uptime_seconds"`
-	Connected     bool         `json:"connected"`
-	LoggedIn      bool         `json:"logged_in"`
-	DeviceJID     string       `json:"device_jid,omitempty"`
+	Status        string             `json:"status"` // "ok" or "degraded"
+	Service       string             `json:"service"`
+	Version       string             `json:"version"`
+	UptimeSeconds float64            `json:"uptime_seconds"`
+	Connected     bool               `json:"connected"`
+	LoggedIn      bool               `json:"logged_in"`
+	DeviceJID     string             `json:"device_jid,omitempty"`
 	PairStatus    pairing.PairStatus `json:"pair_status"`
-	MemoryMB      float64      `json:"memory_mb"`
-	Goroutines    int          `json:"goroutines"`
+	MemoryMB      float64            `json:"memory_mb"`
+	Goroutines    int                `json:"goroutines"`
 }
 
 func GetHealth(cm *whatsapp.ClientManager) HealthResponse {
@@ -50,12 +51,12 @@ func GetHealth(cm *whatsapp.ClientManager) HealthResponse {
 		Status:        status,
 		Service:       "whatsapp-gateway",
 		Version:       "1.0.0",
-		UptimeSeconds: time.Since(startTime).Seconds(),
+		UptimeSeconds: math.Round(time.Since(startTime).Seconds()),
 		Connected:     connected,
 		LoggedIn:      loggedIn,
 		DeviceJID:     deviceJID,
 		PairStatus:    pairState.Status,
-		MemoryMB:      float64(m.Alloc) / 1024 / 1024,
+		MemoryMB:      math.Round(float64(m.Alloc)/1024/1024*10) / 10,
 		Goroutines:    runtime.NumGoroutine(),
 	}
 }

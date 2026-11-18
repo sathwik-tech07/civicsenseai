@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 
 	appEvents "civicsense/whatsapp-gateway/internal/events"
@@ -98,7 +99,20 @@ func (mr *MessageReceiver) HandleIncomingMessage(evt *events.Message) {
 		return
 	}
 
-	senderPhone := evt.Info.Sender.User // digits only, e.g. 919876543210
+	// Robust sender phone extraction:
+	// Prioritize phone number from SenderAlt (used when Sender is LID), then Sender, then Chat
+	var senderPhone string
+	if !evt.Info.SenderAlt.IsEmpty() && evt.Info.SenderAlt.Server == types.DefaultUserServer && evt.Info.SenderAlt.User != "" {
+		senderPhone = evt.Info.SenderAlt.User
+	} else if evt.Info.Sender.Server == types.DefaultUserServer && evt.Info.Sender.User != "" {
+		senderPhone = evt.Info.Sender.User
+	} else if evt.Info.Chat.Server == types.DefaultUserServer && evt.Info.Chat.User != "" {
+		senderPhone = evt.Info.Chat.User
+	} else if evt.Info.Sender.User != "" {
+		senderPhone = evt.Info.Sender.User
+	} else if evt.Info.Chat.User != "" {
+		senderPhone = evt.Info.Chat.User
+	}
 	senderName := evt.Info.PushName
 	ts := evt.Info.Timestamp.Unix()
 
@@ -115,13 +129,39 @@ func (mr *MessageReceiver) HandleIncomingMessage(evt *events.Message) {
 		return
 	}
 
-	// 1. Text message
+	// Unwrap nested message wrappers (ephemeral, view-once, edited, document caption)
+	for {
+		if eph := msgContent.GetEphemeralMessage(); eph != nil && eph.GetMessage() != nil {
+			msgContent = eph.GetMessage()
+		} else if vo := msgContent.GetViewOnceMessage(); vo != nil && vo.GetMessage() != nil {
+			msgContent = vo.GetMessage()
+		} else if vo2 := msgContent.GetViewOnceMessageV2(); vo2 != nil && vo2.GetMessage() != nil {
+			msgContent = vo2.GetMessage()
+		} else if doc := msgContent.GetDocumentWithCaptionMessage(); doc != nil && doc.GetMessage() != nil {
+			msgContent = doc.GetMessage()
+		} else if edited := msgContent.GetEditedMessage(); edited != nil && edited.GetMessage() != nil {
+			msgContent = edited.GetMessage()
+		} else {
+			break
+		}
+	}
+
+	// 1. Text message (direct conversation, extended text, or button/interactive response)
 	if text := msgContent.GetConversation(); text != "" {
 		inboundMsg.Type = "text"
 		inboundMsg.Text = &appEvents.TextMessage{Body: text}
 	} else if extText := msgContent.GetExtendedTextMessage(); extText != nil && extText.GetText() != "" {
 		inboundMsg.Type = "text"
 		inboundMsg.Text = &appEvents.TextMessage{Body: extText.GetText()}
+	} else if btnResp := msgContent.GetButtonsResponseMessage(); btnResp != nil && btnResp.GetSelectedButtonID() != "" {
+		inboundMsg.Type = "text"
+		inboundMsg.Text = &appEvents.TextMessage{Body: btnResp.GetSelectedButtonID()}
+	} else if listResp := msgContent.GetListResponseMessage(); listResp != nil && listResp.GetSingleSelectReply() != nil && listResp.GetSingleSelectReply().GetSelectedRowID() != "" {
+		inboundMsg.Type = "text"
+		inboundMsg.Text = &appEvents.TextMessage{Body: listResp.GetSingleSelectReply().GetSelectedRowID()}
+	} else if templResp := msgContent.GetTemplateButtonReplyMessage(); templResp != nil && templResp.GetSelectedID() != "" {
+		inboundMsg.Type = "text"
+		inboundMsg.Text = &appEvents.TextMessage{Body: templResp.GetSelectedID()}
 	}
 
 	// 2. Image message
@@ -136,7 +176,9 @@ func (mr *MessageReceiver) HandleIncomingMessage(evt *events.Message) {
 		// Download binary media via whatsmeow
 		client := mr.cm.RawClient()
 		if client != nil {
-			imgBytes, err := client.Download(imgMsg)
+			dlCtx, dlCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			imgBytes, err := client.Download(dlCtx, imgMsg)
+			dlCancel()
 			if err != nil {
 				logging.Errorf("Failed to download image media for msg %s: %v", msgID, err)
 			} else {
@@ -170,7 +212,15 @@ func (mr *MessageReceiver) HandleIncomingMessage(evt *events.Message) {
 		},
 	}
 
-	logging.Infof("Received WhatsApp message from %s (%s): type=%s, id=%s", senderPhone, senderName, inboundMsg.Type, msgID)
+	hasText := inboundMsg.Text != nil && inboundMsg.Text.Body != ""
+	textPreview := ""
+	if hasText {
+		textPreview = inboundMsg.Text.Body
+		if len(textPreview) > 30 {
+			textPreview = textPreview[:30] + "..."
+		}
+	}
+	logging.Infof("Received WhatsApp message from %s (%s): type=%s, id=%s, has_text=%v, preview='%s'", senderPhone, senderName, inboundMsg.Type, msgID, hasText, textPreview)
 
 	// Durably persist event in SQLite before dispatch
 	if mr.queueStore != nil {

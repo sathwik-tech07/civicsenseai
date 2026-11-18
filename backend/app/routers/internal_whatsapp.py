@@ -30,6 +30,11 @@ from app.schemas.gateway import (
     GatewayQRResponse,
     GatewayOutboundRequest,
     GatewayOutboundResponse,
+    AdminTestSendMessageRequest,
+    WhatsAppAllowedNumberItem,
+    WhatsAppWhitelistResponse,
+    AddAllowedNumberRequest,
+    ToggleWhitelistRequest,
 )
 from app.services.whatsapp_service import (
     whatsapp_service,
@@ -136,14 +141,47 @@ async def process_gateway_inbound_event(event: GatewayInboundEvent) -> None:
 
     sender_phone = msg.from_
     if not sender_phone:
+        logger.warning("[WHATSAPP_INBOUND] Dropping message without sender_phone: msg_id=%s", msg_id)
         return
+
+    logger.info(
+        "[WHATSAPP_INBOUND] Received event msg_id=%s from=%s type=%s sender_name='%s'",
+        msg_id,
+        sender_phone,
+        msg.type,
+        msg.sender_name or "",
+    )
 
     db = SessionLocal()
     try:
+        # Whitelist & Personal WhatsApp Privacy Filter
+        incoming_body = ""
+        if msg.type == "text" and msg.text:
+            incoming_body = msg.text.body.strip()
+        elif msg.type == "image" and msg.resolved_media and msg.resolved_media.caption:
+            incoming_body = msg.resolved_media.caption.strip()
+
+        if not whatsapp_service.whitelist_manager.is_allowed(sender_phone, incoming_body, db=db):
+            logger.info(
+                "[WHATSAPP_FILTER] Sender %s is not in allowed numbers whitelist (whitelist active). "
+                "Suppressing automated reply to protect personal WhatsApp account.",
+                sender_phone,
+            )
+            return
+
+        # Strip optional '#civic' or '!civic' manual test prefix
+        if msg.type == "text" and msg.text:
+            cleaned_text = msg.text.body.strip()
+            if cleaned_text.lower().startswith("#civic"):
+                msg.text.body = cleaned_text[6:].strip()
+            elif cleaned_text.lower().startswith("!civic"):
+                msg.text.body = cleaned_text[6:].strip()
+
         # 1. Text Messages (Commands, Citizen Chat, Confirmations)
         if msg.type == "text" and msg.text:
             raw_text = msg.text.body.strip()
             lower_text = raw_text.lower()
+            logger.info("[WHATSAPP_INBOUND_TEXT] from=%s raw_text='%s'", sender_phone, raw_text)
             user_role = whatsapp_service.get_user_role(db, sender_phone)
 
             # A. Staff Device Authentication & Secure OTP Linking
@@ -288,20 +326,72 @@ async def process_gateway_inbound_event(event: GatewayInboundEvent) -> None:
             ):
                 await whatsapp_service.update_draft_address(sender_phone, raw_text, db=db)
 
-            # K. Greetings & Help
-            elif lower_text in ("hi", "hello", "hey", "start", "help", "menu", "namaste", "hi!") or lower_text.startswith("hi "):
+            # K. Greetings
+            elif lower_text in (
+                "hi", "hello", "hey", "start", "namaste", "hi!",
+                "hlo", "helo", "halo", "hii", "hiii", "hy", "namaskar",
+                "vanakkam", "namaskara", "adaab", "good morning", "good evening", "good afternoon"
+            ) or lower_text.startswith("hi ") or lower_text.startswith("hello ") or lower_text.startswith("hlo ") or lower_text.startswith("hey "):
+                logger.info("[WHATSAPP_ROUTING] Greeting detected from %s ('%s'), dispatching WELCOME_MESSAGE", sender_phone, raw_text)
                 await whatsapp_service.send_text_message(sender_phone, WELCOME_MESSAGE)
 
-            # L. Conversational Complaint Initiation (Civic problem keywords)
+            # L. Quick Command Guide / Menu
+            elif lower_text in ("help", "menu", "commands", "options", "guide", "features", "what can you do"):
+                logger.info("[WHATSAPP_ROUTING] Help command requested by %s", sender_phone)
+                help_card = (
+                    "🤖 *CivicSense AI — Quick Command Guide*\n\n"
+                    "📸 *Report a Municipal Defect:*\n"
+                    "• Send a *photo* of any pothole, water leak, garbage dump, or broken light.\n"
+                    "• Or text a description: *'Broken pipe near MG Road'* to start a draft.\n\n"
+                    "🔍 *Tracking & Citizen Services:*\n"
+                    "• `track <Complaint ID>` — Check resolution status & assigned crew\n"
+                    "• `my complaints` — List all your active and resolved tickets\n"
+                    "• `escalate <ID> <reason>` — Request commissioner escalation\n"
+                    "• `rate <ID> <1-5>` — Submit satisfaction rating\n\n"
+                    "💡 *Conversational Concierge:*\n"
+                    "You can also ask me any civic question in plain English or regional languages!"
+                )
+                await whatsapp_service.send_text_message(sender_phone, help_card)
+
+            # M. Courtesy & Gratitude Responses
+            elif lower_text in (
+                "thanks", "thank you", "thank u", "thx", "thnx", "tq",
+                "dhanyawad", "dhanyavadagalu", "shukriya", "nandri", "great job",
+                "thank you so much", "thanks a lot", "thanks bot", "good job", "nice"
+            ):
+                logger.info("[WHATSAPP_ROUTING] Courtesy response to %s ('%s')", sender_phone, raw_text)
+                courtesy_msg = (
+                    "You're very welcome! 🙏\n\n"
+                    "CivicSense AI is here 24/7 to help keep our city clean, safe, and well-maintained. "
+                    "Feel free to message or send a photo anytime you spot a municipal defect! 😊"
+                )
+                await whatsapp_service.send_text_message(sender_phone, courtesy_msg)
+
+            # N. Acknowledgements & Pending Draft Reminder
+            elif lower_text in ("ok", "okay", "k", "kk", "sure", "got it", "alright", "fine", "cool", "understood"):
+                pending = whatsapp_service.pending_sessions.get_draft(sender_phone, db=db)
+                if pending:
+                    ack_msg = (
+                        f"Understood! 👍 You have an active complaint draft for *{pending.get('title') or 'Civic Defect'}*.\n\n"
+                        "• Reply *CONFIRM* to submit to municipal response teams.\n"
+                        "• Reply *CANCEL* to discard."
+                    )
+                else:
+                    ack_msg = "Understood! 👍 Send a photograph or describe any civic defect whenever you need assistance."
+                await whatsapp_service.send_text_message(sender_phone, ack_msg)
+
+            # O. Conversational Complaint Initiation (Civic problem keywords)
             elif any(k in lower_text for k in (
                 "pothole", "crater", "garbage", "trash", "waste", "water leak", "pipe burst", "leak",
                 "streetlight", "light pole", "drain", "drainage", "sewer", "sinkhole", "road damage",
                 "broken road", "water pipe", "flooding", "manhole"
             )):
+                logger.info("[WHATSAPP_ROUTING] Civic keyword detected from %s ('%s'), starting text draft", sender_phone, raw_text)
                 await whatsapp_service.handle_conversational_text_draft(sender_phone, raw_text, db=db)
 
-            # M. General Conversational Civic Assistance via Gemini 2.5 Flash
+            # P. General Conversational Civic Assistance via Gemini 2.5 Flash
             else:
+                logger.info("[WHATSAPP_ROUTING] Invoking conversational assistant for %s ('%s')", sender_phone, raw_text)
                 reply = await whatsapp_service.generate_conversational_reply(sender_phone, raw_text)
                 await whatsapp_service.send_text_message(sender_phone, reply)
 
@@ -423,6 +513,7 @@ async def process_gateway_inbound_event(event: GatewayInboundEvent) -> None:
                 )
 
         else:
+            logger.info("[WHATSAPP_FALLBACK] Non-text/non-photo message type='%s' from=%s, dispatching format guidance", msg.type, sender_phone)
             await whatsapp_service.send_text_message(
                 sender_phone,
                 "Currently, CivicSense AI accepts photographs, text commands, and location coordinates. Reply 'Hi' to start.",
@@ -439,6 +530,7 @@ async def process_gateway_inbound_event(event: GatewayInboundEvent) -> None:
 # ==============================================================================
 
 @router.post("/internal/whatsapp/events", status_code=status.HTTP_200_OK)
+@router.post("/api/v1/internal/whatsapp/events", status_code=status.HTTP_200_OK)
 async def receive_gateway_event(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -489,15 +581,31 @@ async def get_gateway_status(current_user: User = Depends(require_admin_or_commi
     secret = getattr(settings, "WHATSAPP_GATEWAY_SECRET", "civicsense-wa-gateway-internal-secret-2026")
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
                 f"{gateway_url}/api/v1/status",
                 headers={"Authorization": f"Bearer {secret}"},
             )
             if resp.status_code == 200:
-                return resp.json()
-            raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    except httpx.RequestError as re:
+                data = resp.json()
+                if "uptime_seconds" in data and isinstance(data["uptime_seconds"], (float, int)):
+                    data["uptime_seconds"] = round(float(data["uptime_seconds"]), 1)
+                # Normalize field names between Go whatsmeow microservice and FastAPI schema
+                if not data.get("jid") and data.get("device_jid"):
+                    data["jid"] = data["device_jid"]
+                if not data.get("memory_alloc_mb") and data.get("memory_mb"):
+                    data["memory_alloc_mb"] = float(data["memory_mb"])
+                return data
+            logger.warning("WhatsApp Gateway returned %s: %s", resp.status_code, resp.text[:200])
+            return GatewayStatusResponse(
+                status="starting_up" if resp.status_code in (502, 503) else "offline",
+                connected=False,
+                logged_in=False,
+                uptime_seconds=0,
+                goroutines=0,
+                memory_alloc_mb=0.0,
+            )
+    except Exception as re:
         logger.warning("Could not reach WhatsApp Gateway at %s: %s", gateway_url, re)
         return GatewayStatusResponse(
             status="offline",
@@ -519,15 +627,20 @@ async def get_gateway_qr(current_user: User = Depends(require_admin_or_commissio
     secret = getattr(settings, "WHATSAPP_GATEWAY_SECRET", "civicsense-wa-gateway-internal-secret-2026")
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
                 f"{gateway_url}/api/v1/qr",
                 headers={"Authorization": f"Bearer {secret}"},
             )
             if resp.status_code == 200:
                 return resp.json()
-            raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    except httpx.RequestError as re:
+            logger.warning("WhatsApp Gateway QR returned %s: %s", resp.status_code, resp.text[:200])
+            return GatewayQRResponse(
+                status="starting_up" if resp.status_code in (502, 503) else "offline",
+                qr_code=None,
+                qr_png_base64=None,
+            )
+    except Exception as re:
         logger.warning("Could not reach WhatsApp Gateway QR endpoint at %s: %s", gateway_url, re)
         return GatewayQRResponse(
             status="offline",
@@ -546,13 +659,16 @@ async def trigger_gateway_reconnect(current_user: User = Depends(require_admin_o
     secret = getattr(settings, "WHATSAPP_GATEWAY_SECRET", "civicsense-wa-gateway-internal-secret-2026")
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"{gateway_url}/api/v1/reconnect",
                 headers={"Authorization": f"Bearer {secret}"},
             )
-            return resp.json()
+            if resp.status_code == 200:
+                return resp.json()
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
     except Exception as e:
+        logger.error("Could not trigger WhatsApp Gateway reconnect: %s", e)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
 
 
@@ -566,13 +682,39 @@ async def trigger_gateway_disconnect(current_user: User = Depends(require_admin_
     secret = getattr(settings, "WHATSAPP_GATEWAY_SECRET", "civicsense-wa-gateway-internal-secret-2026")
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"{gateway_url}/api/v1/disconnect",
                 headers={"Authorization": f"Bearer {secret}"},
             )
-            return resp.json()
+            if resp.status_code == 200:
+                return resp.json()
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
     except Exception as e:
+        logger.error("Could not trigger WhatsApp Gateway disconnect: %s", e)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+
+
+@router.post("/api/v1/admin/whatsapp/logout")
+async def trigger_gateway_logout(current_user: User = Depends(require_admin_or_commissioner)):
+    """
+    Unlinks paired WhatsApp device and resets to a clean state for fresh QR pairing.
+    Restricted to authenticated Administrator and Commissioner roles.
+    """
+    gateway_url = getattr(settings, "WHATSAPP_GATEWAY_URL", "http://localhost:8085").rstrip("/")
+    secret = getattr(settings, "WHATSAPP_GATEWAY_SECRET", "civicsense-wa-gateway-internal-secret-2026")
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{gateway_url}/api/v1/logout",
+                headers={"Authorization": f"Bearer {secret}"},
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    except Exception as e:
+        logger.error("Could not trigger WhatsApp Gateway logout: %s", e)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
 
 
@@ -606,3 +748,134 @@ async def get_gateway_queue_status(current_user: User = Depends(require_admin_or
             "stats": {"pending_count": 0, "failed_count": 0, "acknowledged_count": 0},
             "recent_failures": [],
         }
+
+
+@router.post("/api/v1/admin/whatsapp/test-send")
+async def admin_test_send_whatsapp_message(
+    payload: AdminTestSendMessageRequest,
+    current_user: User = Depends(require_admin_or_commissioner),
+):
+    """
+    Sends an outbound test message via the active WhatsApp Gateway or Meta provider.
+    Restricted to authenticated Administrator and Commissioner roles.
+    """
+    target = payload.recipient.strip()
+    msg_body = payload.message.strip()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Recipient cannot be empty.")
+    if not msg_body:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message body cannot be empty.")
+
+    try:
+        msg_id = await whatsapp_service.send_text_message(recipient=target, text=msg_body)
+        return {
+            "status": "sent",
+            "message_id": msg_id,
+            "recipient": target,
+            "provider": getattr(settings, "WHATSAPP_PROVIDER", "whatsmeow"),
+        }
+    except Exception as exc:
+        logger.error("Admin test dispatch to %s failed: %s", target, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Outbound dispatch failed: {exc}",
+        )
+
+
+# ==============================================================================
+# ALLOWED NUMBERS / WHITELIST MANAGEMENT (PERSONAL ACCOUNT PRIVACY)
+# ==============================================================================
+
+@router.get("/api/v1/admin/whatsapp/whitelist", response_model=WhatsAppWhitelistResponse)
+@router.get("/admin/whatsapp/whitelist", response_model=WhatsAppWhitelistResponse)
+async def get_whatsapp_whitelist(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_or_commissioner),
+):
+    """
+    Returns the current allowed numbers whitelist configuration and contact list.
+    Restricted to Administrator and Commissioner roles.
+    """
+    numbers = whatsapp_service.whitelist_manager.list_numbers(db=db)
+    items = [
+        WhatsAppAllowedNumberItem(
+            phone=n.get("phone", ""),
+            label=n.get("label", "Tester"),
+            enabled=n.get("enabled", True),
+            created_at=n.get("created_at"),
+        )
+        for n in numbers
+    ]
+    return WhatsAppWhitelistResponse(
+        enabled=whatsapp_service.whitelist_manager.is_enabled,
+        allowed_numbers=items,
+        total_count=len(items),
+        bypass_prefix="#civic",
+    )
+
+
+@router.post("/api/v1/admin/whatsapp/whitelist", response_model=WhatsAppAllowedNumberItem)
+@router.post("/admin/whatsapp/whitelist", response_model=WhatsAppAllowedNumberItem)
+async def add_whatsapp_allowed_number(
+    payload: AddAllowedNumberRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_or_commissioner),
+):
+    """
+    Adds a new phone number to the allowed numbers whitelist.
+    The bot will only respond to this number (and other whitelisted contacts).
+    Restricted to Administrator and Commissioner roles.
+    """
+    try:
+        entry = whatsapp_service.whitelist_manager.add_number(
+            phone=payload.phone,
+            label=payload.label,
+            db=db,
+        )
+        return WhatsAppAllowedNumberItem(
+            phone=entry["phone"],
+            label=entry["label"],
+            enabled=entry["enabled"],
+            created_at=entry["created_at"],
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+
+
+@router.delete("/api/v1/admin/whatsapp/whitelist/{phone}")
+@router.delete("/admin/whatsapp/whitelist/{phone}")
+async def remove_whatsapp_allowed_number(
+    phone: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_or_commissioner),
+):
+    """
+    Removes a phone number from the allowed numbers whitelist.
+    Restricted to Administrator and Commissioner roles.
+    """
+    removed = whatsapp_service.whitelist_manager.remove_number(phone=phone, db=db)
+    return {
+        "status": "removed" if removed else "not_found",
+        "phone": phone,
+        "success": removed,
+    }
+
+
+@router.post("/api/v1/admin/whatsapp/whitelist/toggle")
+@router.post("/admin/whatsapp/whitelist/toggle")
+async def toggle_whatsapp_whitelist(
+    payload: ToggleWhitelistRequest,
+    current_user: User = Depends(require_admin_or_commissioner),
+):
+    """
+    Enables or disables whitelist mode.
+    When enabled, the bot ONLY responds to whitelisted phone numbers.
+    When disabled, open mode is active.
+    Restricted to Administrator and Commissioner roles.
+    """
+    whatsapp_service.whitelist_manager.set_enabled(payload.enabled)
+    return {
+        "status": "updated",
+        "enabled": whatsapp_service.whitelist_manager.is_enabled,
+        "whitelist_enabled": whatsapp_service.whitelist_manager.is_enabled,
+    }

@@ -1,11 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"civicsense/whatsapp-gateway/internal/events"
 	"civicsense/whatsapp-gateway/internal/health"
+	"civicsense/whatsapp-gateway/internal/logging"
 	"civicsense/whatsapp-gateway/internal/messaging"
 	"civicsense/whatsapp-gateway/internal/pairing"
 	"civicsense/whatsapp-gateway/internal/queue"
@@ -53,6 +56,17 @@ func (h *APIHandler) Status(w http.ResponseWriter, r *http.Request) {
 // GetQR returns the current pairing QR code for the admin UI.
 func (h *APIHandler) GetQR(w http.ResponseWriter, r *http.Request) {
 	qr := pairing.GetQRState()
+
+	// If unpaired and QR pairing timed out or is idle, atomically transition to connecting
+	// and automatically kick off a new pairing cycle without spamming goroutines on polling
+	if h.cm != nil && !h.cm.IsLoggedIn() && (qr.Status == pairing.StatusTimedOut || qr.Status == pairing.StatusIdle) {
+		pairing.SetStatus(pairing.StatusConnecting)
+		go func() {
+			_ = h.cm.ResetToFreshDevice()
+			_ = h.cm.Start()
+		}()
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(qr)
@@ -73,8 +87,13 @@ func (h *APIHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.sender.SendMessage(r.Context(), &req)
+	// Dedicated 60s timeout context ensures client HTTP disconnects do not cancel in-flight WhatsApp crypto/sends
+	sendCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	resp, err := h.sender.SendMessage(sendCtx, &req)
 	if err != nil {
+		logging.Errorf("Outbound dispatch to %s failed: %v", req.Recipient, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -88,16 +107,23 @@ func (h *APIHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 
 // Disconnect breaks current websocket connection.
 func (h *APIHandler) Disconnect(w http.ResponseWriter, r *http.Request) {
-	h.cm.Disconnect()
+	if h.cm != nil {
+		h.cm.Disconnect()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "disconnected"})
 }
 
-// Reconnect triggers reconnect loop.
+// Reconnect triggers reconnect loop or generates fresh pairing QR if unpaired.
 func (h *APIHandler) Reconnect(w http.ResponseWriter, r *http.Request) {
 	go func() {
-		_ = h.cm.Start()
+		if h.cm != nil {
+			if !h.cm.IsLoggedIn() {
+				_ = h.cm.ResetToFreshDevice()
+			}
+			_ = h.cm.Start()
+		}
 	}()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -106,7 +132,10 @@ func (h *APIHandler) Reconnect(w http.ResponseWriter, r *http.Request) {
 
 // Logout unlinks device from WhatsApp.
 func (h *APIHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	err := h.cm.Logout(r.Context())
+	var err error
+	if h.cm != nil {
+		err = h.cm.Logout(r.Context())
+	}
 	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)

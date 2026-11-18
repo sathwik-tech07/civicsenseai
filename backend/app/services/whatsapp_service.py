@@ -433,6 +433,180 @@ class StaffDeviceLinkManager:
 
 
 # ==============================================================================
+# WHATSAPP ALLOWED NUMBERS / WHITELIST MANAGER (PERSONAL ACCOUNT PRIVACY)
+# ==============================================================================
+
+class WhatsAppWhitelistManager:
+    """
+    Manages allowed/whitelisted phone numbers for WhatsApp interaction.
+    Prevents the CivicSense AI bot from replying to personal, non-testing chats
+    when running on a personal WhatsApp account.
+
+    Supports:
+    1. Initial population from WHATSAPP_ALLOWED_NUMBERS environment variable.
+    2. Dynamic runtime additions/removals with thread-safe caching.
+    3. PostgreSQL-backed persistence via WhatsAppAllowedNumber (with graceful in-memory fallback).
+    4. Smart phone number normalization (matches with/without +91, spaces, dashes).
+    5. Bypass keyword '#civic' for manual testing from any device.
+    """
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._allowed: Dict[str, Dict[str, Any]] = {}
+        self._enabled: bool = getattr(settings, "WHATSAPP_WHITELIST_ENABLED", True)
+        self._load_from_env()
+
+    def _load_from_env(self) -> None:
+        raw = getattr(settings, "WHATSAPP_ALLOWED_NUMBERS", "")
+        if raw:
+            for item in raw.split(","):
+                clean = item.strip()
+                if clean:
+                    digits = re.sub(r"[^\d]", "", clean)
+                    if digits:
+                        self._allowed[digits] = {
+                            "phone": digits,
+                            "label": "Configured Allowed Number",
+                            "enabled": True,
+                            "created_at": datetime.utcnow().isoformat(),
+                        }
+
+    @property
+    def is_enabled(self) -> bool:
+        return self._enabled
+
+    def set_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            self._enabled = enabled
+
+    def add_number(self, phone: str, label: Optional[str] = None, db: Optional[Session] = None) -> Dict[str, Any]:
+        digits = re.sub(r"[^\d]", "", phone)
+        if len(digits) < 7:
+            raise ValueError(f"Invalid phone number '{phone}': must have at least 7 digits.")
+
+        now_iso = datetime.utcnow().isoformat()
+        entry = {
+            "phone": digits,
+            "label": label or "Tester",
+            "enabled": True,
+            "created_at": now_iso,
+        }
+
+        with self._lock:
+            self._allowed[digits] = entry
+
+        # Persist to DB if session provided
+        if db is not None:
+            try:
+                from app.models.whatsapp_allowed_number import WhatsAppAllowedNumber
+                obj = db.query(WhatsAppAllowedNumber).filter(WhatsAppAllowedNumber.phone == digits).first()
+                if obj:
+                    obj.label = label or obj.label
+                    obj.enabled = True
+                else:
+                    obj = WhatsAppAllowedNumber(phone=digits, label=label or "Tester", enabled=True)
+                    db.add(obj)
+                db.commit()
+            except Exception as e:
+                logger.debug("Could not persist allowed number to DB (fallback to in-memory): %s", e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+        return entry
+
+    def remove_number(self, phone: str, db: Optional[Session] = None) -> bool:
+        digits = re.sub(r"[^\d]", "", phone)
+        with self._lock:
+            removed = self._allowed.pop(digits, None) is not None
+
+        if db is not None:
+            try:
+                from app.models.whatsapp_allowed_number import WhatsAppAllowedNumber
+                db.query(WhatsAppAllowedNumber).filter(WhatsAppAllowedNumber.phone == digits).delete()
+                db.commit()
+            except Exception as e:
+                logger.debug("Could not delete allowed number from DB: %s", e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+        return removed
+
+    def list_numbers(self, db: Optional[Session] = None) -> List[Dict[str, Any]]:
+        # Sync from DB if available
+        if db is not None:
+            try:
+                from app.models.whatsapp_allowed_number import WhatsAppAllowedNumber
+                db_entries = db.query(WhatsAppAllowedNumber).filter(WhatsAppAllowedNumber.enabled == True).all()
+                with self._lock:
+                    for obj in db_entries:
+                        if obj.phone not in self._allowed:
+                            self._allowed[obj.phone] = {
+                                "phone": obj.phone,
+                                "label": obj.label,
+                                "enabled": obj.enabled,
+                                "created_at": obj.created_at.isoformat() if obj.created_at else "",
+                            }
+            except Exception as e:
+                logger.debug("Could not load allowed numbers from DB: %s", e)
+
+        with self._lock:
+            return list(self._allowed.values())
+
+    def is_allowed(self, sender_phone: str, message_text: str = "", db: Optional[Session] = None) -> bool:
+        if not self._enabled:
+            return True  # Whitelist disabled: open mode
+
+        # Bypass keyword: messages starting with #civic or !civic are always allowed
+        text_lower = (message_text or "").strip().lower()
+        if text_lower.startswith("#civic") or text_lower.startswith("!civic"):
+            return True
+
+        sender_digits = re.sub(r"[^\d]", "", sender_phone)
+        if not sender_digits:
+            return False
+
+        with self._lock:
+            allowed_keys = list(self._allowed.keys())
+
+        # Check DB if not found in memory
+        if db is not None and not any(self._matches(sender_digits, k) for k in allowed_keys):
+            try:
+                from app.models.whatsapp_allowed_number import WhatsAppAllowedNumber
+                db_entries = db.query(WhatsAppAllowedNumber).filter(WhatsAppAllowedNumber.enabled == True).all()
+                with self._lock:
+                    for obj in db_entries:
+                        self._allowed[obj.phone] = {
+                            "phone": obj.phone,
+                            "label": obj.label,
+                            "enabled": obj.enabled,
+                            "created_at": obj.created_at.isoformat() if obj.created_at else "",
+                        }
+                    allowed_keys = list(self._allowed.keys())
+            except Exception:
+                pass
+
+        return any(self._matches(sender_digits, k) for k in allowed_keys)
+
+    @staticmethod
+    def _matches(sender_digits: str, allowed_digits: str) -> bool:
+        if sender_digits == allowed_digits:
+            return True
+        # Match trailing 10 digits (national format for India, US, etc.)
+        if len(sender_digits) >= 10 and len(allowed_digits) >= 10:
+            if sender_digits[-10:] == allowed_digits[-10:]:
+                return True
+        # Prefix / suffix matching for partial country codes
+        if len(allowed_digits) >= 10 and sender_digits.endswith(allowed_digits):
+            return True
+        if len(sender_digits) >= 10 and allowed_digits.endswith(sender_digits):
+            return True
+        return False
+
+
+# ==============================================================================
 # SERVICE CLIENT IMPLEMENTATION
 # ==============================================================================
 
@@ -470,6 +644,7 @@ class WhatsAppService:
         self.backoff_seconds = backoff_seconds
         self.pending_sessions = PendingSessionStore()
         self.otp_manager = StaffDeviceLinkManager()
+        self.whitelist_manager = WhatsAppWhitelistManager()
 
     def _redact_secrets(self, text: Any) -> str:
         """Redacts sensitive credentials from error messages, URLs, and exception text."""
@@ -539,34 +714,46 @@ class WhatsAppService:
             "Content-Type": "application/json",
         }
 
+        logger.info("[WHATSAPP_OUTBOUND_DISPATCH] Dispatching %s to recipient=%s via %s", message_type, recipient, endpoint)
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=45.0) as client:
                 resp = await client.post(endpoint, json=payload, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
                 msg_id = data.get("message_id") or f"wam_{int(time.time())}"
-                logger.info("Outbound message successfully dispatched via WhatsApp Gateway to %s (id=%s)", recipient, msg_id)
+                logger.info("[WHATSAPP_OUTBOUND_DISPATCH] Successfully sent to %s (id=%s)", recipient, msg_id)
                 return msg_id
         except httpx.HTTPStatusError as hse:
             logger.error("WhatsApp Gateway returned error HTTP %d for recipient %s: %s", hse.response.status_code, recipient, hse.response.text)
             raise WhatsAppAPIError(f"WhatsApp Gateway dispatch failed: {hse.response.text}", status_code=hse.response.status_code)
         except Exception as e:
-            logger.error("Failed to connect to WhatsApp Gateway at %s: %s", endpoint, e)
+            logger.error("Failed to connect to WhatsApp Gateway at %s for recipient %s: %s", endpoint, recipient, e)
             raise WhatsAppNetworkError(f"Failed to communicate with WhatsApp Gateway: {e}")
 
     @staticmethod
     def _clean_recipient(recipient: str) -> str:
         """
-        Cleans and validates citizen phone number (E.164 without leading plus).
+        Cleans and validates citizen phone number (E.164 without leading plus) or JID.
         Example: '+91 98765-43210' -> '919876543210'
+        Example: '103487349182374921@lid' -> '103487349182374921@lid'
         """
         if not recipient or not isinstance(recipient, str):
             raise WhatsAppInvalidRecipientError("Recipient phone number must be a non-empty string.")
 
+        recipient = recipient.strip()
+        if "@" in recipient:
+            user_part, domain_part = recipient.split("@", 1)
+            digits = re.sub(r"[^\d]", "", user_part)
+            if len(digits) < 7 or len(digits) > 25:
+                raise WhatsAppInvalidRecipientError(
+                    f"Invalid recipient JID '{recipient}'. Expected 7-25 digits."
+                )
+            return f"{digits}@{domain_part}"
+
         cleaned = re.sub(r"[^\d]", "", recipient)
-        if len(cleaned) < 7 or len(cleaned) > 15:
+        if len(cleaned) < 7 or len(cleaned) > 25:
             raise WhatsAppInvalidRecipientError(
-                f"Invalid phone number '{recipient}'. Expected 7-15 digits E.164 format."
+                f"Invalid phone number or LID '{recipient}'. Expected 7-25 digits."
             )
         return cleaned
 
@@ -885,16 +1072,17 @@ class WhatsAppService:
         self,
         image_bytes: bytes,
         filename: str = "whatsapp_report.jpg",
+        caption: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Passes downloaded WhatsApp image bytes directly to the existing
-        AIService.analyze_image_vision multimodal pipeline.
+        AIService.analyze_image_vision multimodal pipeline with optional caption context.
         Preserves all Gemini 2.5 Flash validation without modification.
         """
         if not image_bytes or not isinstance(image_bytes, bytes):
             raise ValueError("image_bytes must be non-empty bytes.")
 
-        return await AIService.analyze_image_vision(image_bytes=image_bytes, filename=filename)
+        return await AIService.analyze_image_vision(image_bytes=image_bytes, filename=filename, caption=caption)
 
     # ==========================================================================
     # 5. IMAGE-BASED REPORTING & CITIZEN CONFIRMATION WORKFLOW
@@ -961,7 +1149,7 @@ class WhatsAppService:
 
         # Analyze using Gemini 2.5 Flash Multimodal Vision
         try:
-            analysis = await self.analyze_whatsapp_image(image_bytes=image_bytes, filename=safe_fn)
+            analysis = await self.analyze_whatsapp_image(image_bytes=image_bytes, filename=safe_fn, caption=caption)
         except Exception as e:
             logger.warning("Gemini Vision analysis note: %s. Using standard baseline classification.", e)
             analysis = {
@@ -974,13 +1162,37 @@ class WhatsAppService:
                 "estimated_repair_cost": 45000.0,
                 "saved_early_intervention": 180000.0,
                 "priorityScore": 85,
-                "department": "Road Infrastructure & Works Dept"
+                "department": "Road Infrastructure & Works Dept",
+                "recommended_department": "Road Infrastructure & Works Dept",
+                "is_civic_defect": True,
             }
+
+        # Check for non-civic image rejection
+        if analysis.get("is_civic_defect") is False:
+            logger.info("Non-civic image received from %s; prompting citizen for valid defect photo", sender_phone)
+            try:
+                storage_provider = get_storage_provider()
+                await storage_provider.delete_image(stored_key)
+            except Exception:
+                pass
+
+            non_civic_msg = (
+                "📸 *Photo Received — No Municipal Defect Detected*\n\n"
+                "Our AI inspected your photograph, but could not detect an infrastructure defect "
+                "(such as a pothole, road surface damage, garbage pile, water pipe burst, or broken streetlight).\n\n"
+                "💡 *How to Report:*\n"
+                "Please send a clear photo showing the civic defect on the street, sidewalk, or public area so municipal crews can inspect and resolve it."
+            )
+            await self.send_text_message(sender_phone, non_civic_msg)
+            return {"error": "Non-civic defect image", "is_civic_defect": False}
 
         cat = analysis.get("category", "Road Damage")
         sev = analysis.get("severity", "high")
         cost = float(analysis.get("estimated_repair_cost", 45000.0))
         conf = float(analysis.get("confidence", 92.5))
+        dept = analysis.get("recommended_department") or analysis.get("department", "Road Infrastructure & Works Dept")
+        repair_time = analysis.get("estimated_repair_time", "24-48 Hours")
+        safety_risk = analysis.get("public_safety_risk") or "Presents hazard to vehicular traffic and pedestrians."
         summary = analysis.get("description") or analysis.get("explanation") or f"{cat} defect reported by citizen."
 
         # Map to valid incident types
@@ -1000,6 +1212,11 @@ class WhatsAppService:
         # Stash draft in pending session store
         existing = self.pending_sessions.get_draft(sender_phone, db=db)
         effective_address = (existing and existing.get("address")) or "Victoria Road Corridor (Reported via WhatsApp)"
+        if caption:
+            match_addr = re.search(r"(?:near|at|on|in|opposite|behind|beside)\s+([A-Za-z0-9\s,\.\-]+)", caption, re.IGNORECASE)
+            if match_addr:
+                effective_address = match_addr.group(0).strip().title()
+
         effective_lat = (existing and existing.get("lat")) or 12.9716
         effective_lng = (existing and existing.get("lng")) or 77.5946
         user_desc = existing and existing.get("user_description")
@@ -1021,19 +1238,24 @@ class WhatsAppService:
             "confidence": conf,
             "description": effective_desc,
             "explanation": analysis.get("explanation", "Analyzed via Gemini 2.5 Flash Vision."),
-            "recommended_department": analysis.get("department", "Road Infrastructure & Works Dept"),
+            "recommended_department": dept,
             "sender_phone": sender_phone,
             "analysis_raw": analysis
         }
         self.pending_sessions.store_draft(sender_phone, draft_data, db=db)
 
-        # Build interactive confirmation message
+        # Build rich interactive confirmation message
         body_text = (
             f"🔍 *CivicSense AI Vision Analysis Complete*\n\n"
-            f"• *Issue:* {cat} ({sev.title()} Severity)\n"
-            f"• *AI Confidence:* {conf:.1f}%\n"
-            f"• *Estimated Repair:* ₹{cost:,.0f}\n"
-            f"• *Ward:* Ward 1 - Metro Health Corridor\n\n"
+            f"🚨 *Defect Detected:* {cat}\n"
+            f"📊 *Severity:* {sev.title()} | *AI Confidence:* {conf:.1f}%\n"
+            f"🏢 *Assigned Dept:* {dept}\n"
+            f"💰 *Estimated Repair:* ₹{cost:,.0f}\n"
+            f"⏱️ *Estimated Fix Time:* {repair_time}\n"
+            f"⚠️ *Safety Risk:* {safety_risk}\n\n"
+            f"📝 *Description:* {summary}\n"
+            f"📍 *Location:* {effective_address}\n\n"
+            f"💡 *To update location:* Share your GPS pin or reply `Address: <street>`\n\n"
             f"Would you like to formally file this complaint with municipal authorities?"
         )
 
@@ -1315,12 +1537,15 @@ class WhatsAppService:
         if gemini_client and current_key:
             try:
                 system_instruction = (
-                    "You are CivicSense AI, the official municipal civic assistant for the city of Bengaluru. "
-                    "You help citizens report problems (potholes, garbage, water leaks, broken streetlights), "
-                    "track complaints, and understand municipal services. "
-                    "Keep responses concise (under 3 sentences), polite, and actionable. "
-                    "Remind users they can simply send a photo of any issue to report it immediately. "
-                    "Never fabricate incident numbers."
+                    "You are CivicSense AI, the official intelligent municipal civic assistant for the city of Bengaluru.\n"
+                    "Your duties:\n"
+                    "1. Help citizens report civic issues (potholes, road damage, water leaks, garbage dumps, broken streetlights, clogged drains).\n"
+                    "2. Explain municipal departments accurately (BBMP for roads & garbage, BWSSB for water & drainage, BESCOM for streetlights & power).\n"
+                    "3. Format responses neatly for WhatsApp with bold headers, concise bullet points, and friendly emojis.\n"
+                    "4. Keep replies concise (2 to 4 sentences maximum), polite, and actionable on mobile.\n"
+                    "5. Remind users they can simply send a photo here on WhatsApp to report any problem immediately.\n"
+                    "6. If the user writes in Hindi, Kannada, Telugu, or Hinglish, reply politely in the same language or friendly English.\n"
+                    "7. Never fabricate complaint IDs or personal contact information."
                 )
                 from google.genai import types
                 res = gemini_client.models.generate_content(
@@ -1334,10 +1559,12 @@ class WhatsAppService:
 
         # Resilient baseline fallback
         return (
-            "I am CivicSense AI, your smart municipal assistant.\n\n"
-            "• To *report an issue*, simply send a photograph of the problem.\n"
-            "• To *track a complaint*, reply: `track <Complaint ID>`\n"
-            "• For emergency hazards, our automated vision pipeline prioritizes critical incidents."
+            "🤖 *CivicSense AI Municipal Concierge*\n\n"
+            "I am here 24/7 to help you report and track municipal infrastructure defects across Bengaluru.\n\n"
+            "📸 *To report an issue:* Simply send a photograph of the defect.\n"
+            "🔍 *To track a ticket:* Reply `track <Complaint ID>`\n"
+            "📋 *To view your history:* Reply `my complaints`\n\n"
+            "Feel free to ask any civic question or send a photo to get started! 😊"
         )
 
     # ==========================================================================

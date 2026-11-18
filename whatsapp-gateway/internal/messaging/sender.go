@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"go.mau.fi/whatsmeow"
-	waProto "go.mau.fi/whatsmeow/binary/proto"
+	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 
@@ -45,8 +45,13 @@ func CleanRecipient(recipient string) (types.JID, error) {
 
 	// Extract digits
 	digits := digitsOnlyRegex.ReplaceAllString(recipient, "")
-	if len(digits) < 7 || len(digits) > 15 {
-		return types.EmptyJID, fmt.Errorf("invalid recipient phone '%s': expected 7-15 digits", recipient)
+	if len(digits) < 7 || len(digits) > 25 {
+		return types.EmptyJID, fmt.Errorf("invalid recipient phone '%s': expected 7-25 digits", recipient)
+	}
+
+	// WhatsApp LIDs are typically 16-20 digits
+	if len(digits) > 15 {
+		return types.NewJID(digits, types.HiddenUserServer), nil
 	}
 
 	return types.NewJID(digits, types.DefaultUserServer), nil
@@ -64,16 +69,19 @@ func (ms *MessageSender) SendMessage(ctx context.Context, req *events.OutboundSe
 		return nil, fmt.Errorf("whatsapp client is disconnected")
 	}
 
+	logging.Infof("Dispatching outbound %s message to %s (raw recipient='%s')", req.Type, jid.String(), req.Recipient)
+
 	switch strings.ToLower(req.Type) {
 	case "text":
 		if req.Text == nil || strings.TrimSpace(req.Text.Body) == "" {
 			return nil, fmt.Errorf("text message body cannot be empty")
 		}
-		msg := &waProto.Message{
+		msg := &waE2E.Message{
 			Conversation: proto.String(strings.TrimSpace(req.Text.Body)),
 		}
 		resp, err := client.SendMessage(ctx, jid, msg)
 		if err != nil {
+			logging.Errorf("Failed to send WhatsApp text message to %s: %v", jid.String(), err)
 			return nil, fmt.Errorf("failed to send text message: %w", err)
 		}
 		logging.Infof("Outbound text message sent to %s (msg_id=%s)", jid.String(), resp.ID)
@@ -104,7 +112,7 @@ func (ms *MessageSender) SendMessage(ctx context.Context, req *events.OutboundSe
 			return nil, fmt.Errorf("failed to upload image to WhatsApp media CDN: %w", err)
 		}
 
-		imgMsg := &waProto.ImageMessage{
+		imgMsg := &waE2E.ImageMessage{
 			Caption:       proto.String(req.Image.Caption),
 			Mimetype:      proto.String(mime),
 			URL:           &uploadResp.URL,
@@ -115,7 +123,7 @@ func (ms *MessageSender) SendMessage(ctx context.Context, req *events.OutboundSe
 			FileLength:    proto.Uint64(uint64(len(imgBytes))),
 		}
 
-		msg := &waProto.Message{
+		msg := &waE2E.Message{
 			ImageMessage: imgMsg,
 		}
 

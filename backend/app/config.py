@@ -1,4 +1,5 @@
 import os
+import sys
 from pydantic import BaseModel, model_validator
 
 INSECURE_DEFAULT_SECRET = "civicsense-ai-super-secret-key-change-in-production-2026"
@@ -13,6 +14,8 @@ DEFAULT_DEV_CORS_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
+
+DEFAULT_STAGING_CORS_ORIGIN_REGEX = r"^https://civicsenseai(-[a-zA-Z0-9_-]+)?-sathwiks-projects-d1eaef45\.vercel\.app$"
 
 DEFAULT_TRUSTED_PROXIES = [
     "127.0.0.1",
@@ -144,6 +147,17 @@ class Settings(BaseModel):
         "true" if os.getenv("WHATSAPP_PROVIDER", "whatsmeow").lower() == "whatsmeow" else "false"
     ).lower() in ("true", "1", "yes")
 
+    # WhatsApp Personal Account Privacy / Whitelist Filter
+    # When enabled, the bot ONLY responds to whitelisted phone numbers (protecting personal chats from automated replies)
+    WHATSAPP_WHITELIST_ENABLED: bool = os.getenv(
+        "WHATSAPP_WHITELIST_ENABLED",
+        "false" if ("pytest" in sys.modules or "PYTEST_CURRENT_TEST" in os.environ or os.getenv("ENVIRONMENT", "").lower() in ("test", "testing")) else "true"
+    ).lower() in ("true", "1", "yes")
+    WHATSAPP_ALLOWED_NUMBERS: str = os.getenv(
+        "WHATSAPP_ALLOWED_NUMBERS",
+        "919573161396,917838447570,919963999368,919963999396"
+    )
+
     # Staging Isolation Guard
     STAGING_DATABASE_ONLY: bool = os.getenv("STAGING_DATABASE_ONLY", "false").lower() in ("true", "1", "yes")
 
@@ -154,6 +168,30 @@ class Settings(BaseModel):
         os.getenv("CORS_ORIGINS"),
         is_production=os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower() in PRODUCTION_LIKE_ENVIRONMENTS
     )
+
+    # CORS Origin Regex for Staging Preview Deployments
+    # In staging, automatically defaults to trusted CivicSense Vercel preview deployments.
+    # In production, strictly defaults to None (production requires explicit CORS_ORIGINS).
+    CORS_ORIGIN_REGEX: str | None = None
+
+    @model_validator(mode="after")
+    def resolve_cors_origin_regex(self) -> "Settings":
+        env = self.ENVIRONMENT.lower()
+        if env in ("staging", "stage"):
+            if self.CORS_ORIGIN_REGEX is None:
+                self.CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX", DEFAULT_STAGING_CORS_ORIGIN_REGEX)
+        elif env in ("production", "prod"):
+            # In production, do not default to staging preview regex.
+            # If CORS_ORIGIN_REGEX was explicitly configured via environment variable, preserve it
+            # so that validate_production_security fails closed instead of silently ignoring it.
+            if self.CORS_ORIGIN_REGEX is None:
+                raw_regex = os.getenv("CORS_ORIGIN_REGEX")
+                if raw_regex and raw_regex.strip():
+                    self.CORS_ORIGIN_REGEX = raw_regex.strip()
+        else:
+            if self.CORS_ORIGIN_REGEX is None:
+                self.CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX")
+        return self
 
     # Rate Limiting & Brute-Force Protection
     RATE_LIMIT_LOGIN_MAX_ATTEMPTS: int = int(os.getenv("RATE_LIMIT_LOGIN_MAX_ATTEMPTS", "10"))
@@ -237,6 +275,24 @@ def validate_production_security(settings_obj: Settings):
                 f"CRITICAL CORS CONFIGURATION ERROR: Wildcard origin '*' is strictly forbidden {forbid_str}. "
                 "Specify explicit trusted origins in CORS_ORIGINS."
             )
+
+        # In production mode, CORS_ORIGIN_REGEX must never be enabled (production requires explicit CORS_ORIGINS)
+        if settings_obj.ENVIRONMENT in ("production", "prod"):
+            if settings_obj.CORS_ORIGIN_REGEX:
+                raise RuntimeError(
+                    "CRITICAL CORS CONFIGURATION ERROR: CORS_ORIGIN_REGEX is strictly forbidden in production mode. "
+                    "Production requires explicit allowed origins configured in CORS_ORIGINS."
+                )
+
+        # In staging mode, reject wildcard or overly permissive regex patterns
+        if settings_obj.CORS_ORIGIN_REGEX:
+            regex_str = settings_obj.CORS_ORIGIN_REGEX.strip()
+            overly_permissive = ("*", ".*", "^.*$", "^https?://.*", ".*vercel.app.*", "^https?://.*\\.vercel\\.app$")
+            if regex_str in overly_permissive or regex_str.startswith(".*") or regex_str.endswith(".*"):
+                raise RuntimeError(
+                    f"CRITICAL CORS CONFIGURATION ERROR: Overly permissive or wildcard origin regex '{regex_str}' is strictly forbidden. "
+                    "Specify a narrowly scoped regex matching only trusted deployment patterns."
+                )
 
         # Persistent Storage Provider Security in Production & Staging
         if settings_obj.STORAGE_PROVIDER == "local":

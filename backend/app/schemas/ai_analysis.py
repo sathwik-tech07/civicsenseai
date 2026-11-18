@@ -46,6 +46,7 @@ class CivicVisionAnalysis(BaseModel):
     savedEarlyIntervention: Optional[float] = None
     requires_manual_review: Optional[bool] = False
     ai_engine: Optional[str] = None
+    is_civic_defect: Optional[bool] = True
 
 class AIChatRequest(BaseModel):
     query: str
