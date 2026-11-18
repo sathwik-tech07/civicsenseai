@@ -8,7 +8,7 @@ interface LoginPageProps {
   onLoginSuccess?: (role: UserRole) => void;
 }
 
-const isProd = import.meta.env.PROD;
+const isStrictProduction = typeof window !== 'undefined' && window.location.hostname === 'civicsenseai-theta.vercel.app';
 
 const ROLES: { id: UserRole; label: string; icon: string; desc: string }[] = [
   { id: 'commissioner', label: 'Commissioner', icon: '🏛️', desc: 'Executive Command & War Room' },
@@ -18,10 +18,10 @@ const ROLES: { id: UserRole; label: string; icon: string; desc: string }[] = [
 ];
 
 const ROLE_PRESETS: Record<UserRole, { name: string; email: string; defaultPassword?: string }> = {
-  commissioner: { name: 'Dr. Anita Roy', email: 'commissioner@civicsense.ai', defaultPassword: isProd ? '' : 'password123' },
-  engineer: { name: 'Eng. Rajesh V', email: 'engineer@civicsense.ai', defaultPassword: isProd ? '' : 'password123' },
-  citizen: { name: 'Priya Sharma', email: 'citizen@civicsense.ai', defaultPassword: isProd ? '' : 'password123' },
-  admin: { name: 'System Administrator', email: 'admin@civicsense.ai', defaultPassword: isProd ? '' : 'password123' },
+  commissioner: { name: 'Dr. Anita Roy', email: 'commissioner@civicsense.ai', defaultPassword: 'password123' },
+  engineer: { name: 'Eng. Rajesh V', email: 'engineer@civicsense.ai', defaultPassword: 'password123' },
+  citizen: { name: 'Priya Sharma', email: 'citizen@civicsense.ai', defaultPassword: 'password123' },
+  admin: { name: 'System Administrator', email: 'admin@civicsense.ai', defaultPassword: 'password123' },
 };
 
 export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
@@ -30,7 +30,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [selectedRole, setSelectedRole] = useState<UserRole>('commissioner');
   const [fullName, setFullName] = useState('Dr. Anita Roy');
   const [email, setEmail] = useState('commissioner@civicsense.ai');
-  const [password, setPassword] = useState(isProd ? '' : 'password123');
+  const [password, setPassword] = useState(isStrictProduction ? '' : 'password123');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
@@ -52,7 +52,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     if (preset) {
       setFullName(preset.name);
       setEmail(preset.email);
-      setPassword(isProd ? '' : (preset.defaultPassword || ''));
+      setPassword(isStrictProduction ? '' : (preset.defaultPassword || 'password123'));
     }
   };
 
@@ -483,7 +483,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   />
                 </div>
                 {!isSignUp && (
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+                    {!isStrictProduction ? (
+                      <span style={{ fontSize: 11, color: '#94A3B8' }}>
+                        Demo Password: <button type="button" onClick={() => setPassword('password123')} style={{ background: 'rgba(0, 212, 255, 0.12)', border: 'none', color: '#00D4FF', fontWeight: 600, padding: '2px 6px', borderRadius: 4, cursor: 'pointer', fontSize: 11 }}>password123</button>
+                      </span>
+                    ) : <span />}
                     <button
                       type="button"
                       onClick={() => {
@@ -550,7 +555,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   opacity: isSubmitting ? 0.7 : 1,
                 }}
               >
-                <span>{isSubmitting ? 'Verifying Credentials...' : (isSignUp ? 'Register Citizen Account' : 'Enter Command Center')}</span>
+                <span>{isSubmitting ? 'Connecting to Cloud Backend...' : (isSignUp ? 'Register Citizen Account' : 'Enter Command Center')}</span>
                 <ArrowRight size={18} />
               </button>
 
